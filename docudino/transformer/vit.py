@@ -11,13 +11,17 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-from .attention import MultiHeadAttention
-from .positional_encoding import LearnedPositionalEncoding
+from attention import MultiHeadAttention
+from positional_encoding import LearnedPositionalEncoding
 
 class PatchEmbeddings(nn.Module):
+    """
+    A Neural Network module responsible for creating linear embeddings of patches in an input image.
+    """
+    
     def __init__(self, d_model: int, patch_size: int, n_channels: int):
         """
-        Creates a new `nn.Module` that embeds patches from an image
+        Creates a new `nn.Module` that embeds patches from an image.
         
         Args:
             d_model (int): The dimensionality of the model
@@ -66,11 +70,16 @@ class PatchEmbeddings(nn.Module):
         
         return x
 
-class TransformerEncoder(nn.Module):
+class TransformerBlock(nn.Module):
+    """
+    A single block of a Vision Transformer. This includes a `MultiHeadAttention` layer and an `MLP`
+    layer, with `LayerNorm`s before each layer.
+    """
+    
     def __init__(self, d_model: int, n_heads: int, r_mlp: int = 4):
         """
-        Creates a new `nn.Module` that performs Transformer encoding with a pre-LN setup and
-        `MultiHeadAttention` and `MLP` sublayers
+        Creates a new `nn.Module` that performs Transformer encoding with a pre-norm setup and
+        `MultiHeadAttention` and `MLP` sublayers.
         
         Args:
             d_model (int): The dimensionality of the model
@@ -84,16 +93,12 @@ class TransformerEncoder(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         
-        # sublayer 1: Normalization
+        # sublayer 1: Multi-Head attention
         self.ln1 = nn.LayerNorm(d_model)
-        
-        # sublayer 1: Multi-Head Attention
         self.mha = MultiHeadAttention(d_model, n_heads)
         
-        # sublayer 2: Normalization
+        # sublayer 2: Multi-Layer Perceptron
         self.ln2 = nn.LayerNorm(d_model)
-        
-        # sublaye 3: Multi-layer Perceptron
         self.mlp = nn.Sequential(
             nn.Linear(d_model, d_model * r_mlp),
             nn.GELU(),
@@ -110,15 +115,31 @@ class TransformerEncoder(nn.Module):
         return x
 
 class VisionTransformer(nn.Module):
+    """
+    A full implementation of a Vision Transformer with multiple `TransformerBlock`s. Handles patch embedding,
+    positional encoding, and transformer blocks.
+    """
+    
     def __init__(self,
             d_model: int,
-            n_classes: int,
             img_size: int,
             patch_size: int,
             n_channels: int,
             n_heads: int,
             n_layers: int,
         ):
+        """
+        Creates a new `nn.Module` that connects a few different components in order to implement a full
+        Vision Transformer.
+        
+        Args:
+            d_model (int): The dimensionality of the model
+            img_size (int): The standard image size accepted by this model
+            patch_size (int): The patch size used for patch embeddings
+            n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
+            n_heads (int): The number of heads to create in the `MultiHeadAttention` block 
+            n_layers (int): The number of `TransformerBlock`s to create
+        """
         
         super().__init__()
         
@@ -128,7 +149,6 @@ class VisionTransformer(nn.Module):
         
         # store parameters
         self.d_model = d_model
-        self.n_classes = n_classes
         self.img_size = img_size
         self.patch_size = patch_size
         self.n_channels = n_channels
@@ -137,13 +157,7 @@ class VisionTransformer(nn.Module):
         # create encoders
         self.patch_embedding = PatchEmbeddings(d_model, patch_size, n_channels)
         self.positional_encoding = LearnedPositionalEncoding(d_model, img_size, patch_size)
-        self.transformer_encoder = nn.Sequential(*[TransformerEncoder(d_model, n_heads) for _ in range(n_layers)])
-        
-        # classification MLP
-        self.classifier = nn.Sequential(
-            nn.Linear(self.d_model, self.n_classes),
-            nn.Softmax(dim=-1)
-        )
+        self.blocks = nn.ModuleList([TransformerBlock(d_model, n_heads) for _ in range(n_layers)])
     
     def forward(self, images: torch.Tensor):
         B, C, W, H = images.shape
@@ -155,97 +169,7 @@ class VisionTransformer(nn.Module):
         x = self.positional_encoding(x, W, H)
         
         # run through transformer
-        x = self.transformer_encoder(x)
-        
-        # classify image (using just the cls token)
-        x = self.classifier(x[:,0])
+        for block in self.blocks:
+            x = block(x)
         
         return x
-
-if __name__ == "__main__":
-    # training parameters
-    d_model = 9
-    n_classes = 10
-    img_size = 32
-    patch_size = 16
-    n_channels = 1
-    n_heads = 3
-    n_layers = 3
-    batch_size = 128
-    epochs = 5
-    alpha = 0.005
-    
-    # create image transform
-    transform = T.Compose([
-        T.Resize(img_size),
-        T.ToImage(),
-        T.ToDtype(torch.float32, scale=True),
-    ])
-    
-    # load MNIST
-    train_set = MNIST(
-        root="./datasets", train=True, download=True, transform=transform
-    )
-    test_set = MNIST(
-        root="./datasets", train=False, download=True, transform=transform
-    )
-    
-    train_loader = DataLoader(train_set, shuffle=True,  batch_size=batch_size)
-    test_loader = DataLoader(test_set,   shuffle=False, batch_size=batch_size)
-    
-    # check training device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device: ", device, f"({torch.cuda.get_device_name(device)})" if torch.cuda.is_available() else "")
-    
-    # create transformer
-    transformer = VisionTransformer(d_model, n_classes, img_size, patch_size, n_channels, n_heads, n_layers).to(device)
-
-    # create optimizer and loss
-    optimizer = Adam(transformer.parameters(), lr=alpha)
-    criterion = nn.CrossEntropyLoss()
-
-    # start training
-    for epoch in range(epochs):
-        training_loss = 0.0
-        
-        # iterate through each batch
-        for data in tqdm(train_loader):
-            inputs, labels = data
-            inputs, labels = inputs.to(device), labels.to(device)
-
-            # clear gradients
-            optimizer.zero_grad()
-
-            # run model, calculate loss
-            outputs = transformer(inputs)
-            loss = criterion(outputs, labels)
-            
-            # optimize model
-            loss.backward()
-            optimizer.step()
-
-            # log time
-            training_loss += loss.item()
-
-        print(f'Epoch {epoch + 1}/{epochs} loss: {training_loss  / len(train_loader) :.2f}\n')
-    
-        # validation accuracy
-        correct = 0
-        total = 0
-        
-        # don't adjust gradients
-        with torch.no_grad():
-            for data in tqdm(test_loader):
-                images, labels = data
-                images, labels = images.to(device), labels.to(device)
-
-                # run transformer
-                outputs = transformer(images)
-
-                # check predictions
-                _, predicted = torch.max(outputs.data, 1)
-                
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-        
-        print(f'Model Accuracy: {100.0 * correct / total:.2f}%\n')

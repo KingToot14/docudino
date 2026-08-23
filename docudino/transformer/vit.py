@@ -11,6 +11,9 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
+from .attention import MultiHeadAttention
+from .positional_encoding import LearnedPositionalEncoding
+
 class PatchEmbeddings(nn.Module):
     def __init__(self, d_model: int, patch_size: int, n_channels: int):
         """
@@ -62,128 +65,6 @@ class PatchEmbeddings(nn.Module):
         x = torch.cat((tokens_batch, x), dim=1)
         
         return x
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, img_size: int, patch_size: int):
-        """
-        Creates a new `nn.Module` that appends a class token and positional encoding to a
-        sequence of patches.
-        
-        Args:
-            d_model (int): The dimensionality of the model
-            img_size (int): The size of the image to be processed
-            patch_size (int): The size of the patches taken from the image
-        """
-        
-        super().__init__()
-        
-        # store parameters
-        self.d_model = d_model
-        self.img_size = img_size
-        self.patch_size = patch_size
-        
-        # create a blank positional encoding
-        self.pos_embed = nn.Parameter(torch.zeros(1, (img_size // patch_size) ** 2 + 1, d_model))
-        
-        # initialize parameters
-        nn.init.trunc_normal_(self.pos_embed, std=.02)
-    
-    def forward(self, x: torch.Tensor, w: int, h: int):
-        n_patches = x.shape[1] - 1
-        N = self.pos_embed.shape[1] - 1
-        
-        if n_patches == N and w == h:
-            return x + self.pos_embed
-        
-        # interpolate position embeds | x: (batches, patches, dimensions)
-        class_pos_embed = self.pos_embed[:, 0]
-        patch_pos_embed = self.pos_embed[:, 1:]
-        
-        dim = x.shape[-1]
-        
-        # apparently this fixes something with floating point precision
-        w0 = w // self.patch_size + 0.1
-        h0 = h // self.patch_size + 0.1
-        
-        patch_pos_embed = nn.functional.interpolate(
-            # (batch, patch, dim) -> (batch, w, h, dim) -> (batch, dim, w, h)
-            patch_pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
-            scale_factor=(w0 / math.sqrt(N), w0 / math.sqrt(N)),
-            mode='bicubic'
-        )
-        
-        # (batch, dim, w, h) -> (batch, w, h, dim) -> (batch, patch, dim)
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-        
-        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
-
-class AttentionHead(nn.Module):
-    def __init__(self, d_model: int, head_size: int):
-        """
-        Creates a new `nn.Module` that implements scaled dot-product attention
-        
-        Args:
-            d_model (int): The dimensionality of the model
-            head_size (int): the size of each head
-        """
-        
-        super().__init__()
-        
-        # store parameters
-        self.head_size = head_size
-        
-        # create projections
-        self.query = nn.Linear(d_model, head_size)
-        self.key = nn.Linear(d_model, head_size)
-        self.value = nn.Linear(d_model, head_size)
-    
-    def forward(self, x: torch.Tensor):
-        # collect query, key, and value
-        Q: torch.Tensor = self.query(x)
-        K: torch.Tensor = self.key(x)
-        V: torch.Tensor = self.value(x)
-        
-        # calculate attention score
-        score = Q @ K.transpose(-2, -1)
-        
-        # scaling
-        attn = score / (self.head_size ** 0.5)
-        attn = torch.softmax(attn, dim=-1)
-        
-        # return the weighted sum of values
-        return attn @ V
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
-        """
-        Creates a new `nn.Module` that implements multi-head attention by running multiple
-        instances of `AttentionHead` in sequence.
-        
-        Args:
-            d_model (int): The dimensionality of the model
-            n_heads (int): The number of heads to create
-        """
-        
-        super().__init__()
-        
-        # store parameters
-        assert d_model % n_heads == 0, "Model dimensionality must be divisible by the number of heads"
-        self.head_size = d_model // n_heads
-        
-        # concatenation projection
-        self.W_o = nn.Linear(d_model, d_model)
-        
-        # create list of heads
-        self.heads = nn.ModuleList([AttentionHead(d_model, self.head_size) for _ in range(n_heads)])
-    
-    def forward(self, x: torch.Tensor):
-        # combine attention heads
-        out = torch.cat([head(x) for head in self.heads], dim=-1)
-        
-        # learnable projection
-        out = self.W_o(out)
-        
-        return out
 
 class TransformerEncoder(nn.Module):
     def __init__(self, d_model: int, n_heads: int, r_mlp: int = 4):
@@ -255,7 +136,7 @@ class VisionTransformer(nn.Module):
         
         # create encoders
         self.patch_embedding = PatchEmbeddings(d_model, patch_size, n_channels)
-        self.positional_encoding = PositionalEncoding(d_model, img_size, patch_size)
+        self.positional_encoding = LearnedPositionalEncoding(d_model, img_size, patch_size)
         self.transformer_encoder = nn.Sequential(*[TransformerEncoder(d_model, n_heads) for _ in range(n_layers)])
         
         # classification MLP

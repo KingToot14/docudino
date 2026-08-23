@@ -1,15 +1,5 @@
-import math
-
 import torch
 import torch.nn as nn
-
-import torchvision.transforms.v2 as T
-from torch.optim import Adam
-from torchvision.datasets.mnist import MNIST
-
-from torch.utils.data import DataLoader
-
-from tqdm import tqdm
 
 from attention import MultiHeadAttention
 from positional_encoding import LearnedPositionalEncoding
@@ -35,14 +25,8 @@ class PatchEmbeddings(nn.Module):
         self.patch_size = patch_size
         self.n_channels = n_channels
         
-        # create a blank classification token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        
         # create the patch splitter
         self.linear_proj = nn.Conv2d(self.n_channels, self.d_model, kernel_size=self.patch_size, stride=self.patch_size)
-        
-        # initialize parameters
-        nn.init.trunc_normal_(self.cls_token, std=.02)
     
     def forward(self, x: torch.Tensor):
         """
@@ -64,10 +48,6 @@ class PatchEmbeddings(nn.Module):
         # (B, d_model, P) -> (B, P, d_model)
         x = x.transpose(1, 2)
         
-        # add class token
-        tokens_batch = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((tokens_batch, x), dim=1)
-        
         return x
 
 class TransformerBlock(nn.Module):
@@ -76,7 +56,7 @@ class TransformerBlock(nn.Module):
     layer, with `LayerNorm`s before each layer.
     """
     
-    def __init__(self, d_model: int, n_heads: int, r_mlp: int = 4):
+    def __init__(self, d_model: int, n_heads: int, r_mlp: int = 4, qkv_bias: bool = True):
         """
         Creates a new `nn.Module` that performs Transformer encoding with a pre-norm setup and
         `MultiHeadAttention` and `MLP` sublayers.
@@ -85,6 +65,7 @@ class TransformerBlock(nn.Module):
             d_model (int): The dimensionality of the model
             n_heads (int): The number of heads to create in the `MultiHeadAttention` block
             r_mlp (int): How many dimensions the `MLP` should multiply by. Default = 4
+            qkv_bias (bool): If true, the `qkv` projection will have a bias term
         """
         
         super().__init__()
@@ -95,7 +76,7 @@ class TransformerBlock(nn.Module):
         
         # sublayer 1: Multi-Head attention
         self.ln1 = nn.LayerNorm(d_model)
-        self.mha = MultiHeadAttention(d_model, n_heads)
+        self.mha = MultiHeadAttention(d_model, n_heads, qkv_bias)
         
         # sublayer 2: Multi-Layer Perceptron
         self.ln2 = nn.LayerNorm(d_model)
@@ -127,6 +108,7 @@ class VisionTransformer(nn.Module):
             n_channels: int,
             n_heads: int,
             n_layers: int,
+            qkv_bias: bool = True,
         ):
         """
         Creates a new `nn.Module` that connects a few different components in order to implement a full
@@ -139,6 +121,7 @@ class VisionTransformer(nn.Module):
             n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
             n_heads (int): The number of heads to create in the `MultiHeadAttention` block 
             n_layers (int): The number of `TransformerBlock`s to create
+            qkv_bias (bool): If true, the `qkv` projection will have a bias term
         """
         
         super().__init__()
@@ -154,16 +137,27 @@ class VisionTransformer(nn.Module):
         self.n_channels = n_channels
         self.n_heads = n_heads
         
+        # create a blank classification token
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.tokens: torch.Tensor = None
+        
         # create encoders
         self.patch_embedding = PatchEmbeddings(d_model, patch_size, n_channels)
         self.positional_encoding = LearnedPositionalEncoding(d_model, img_size, patch_size)
-        self.blocks = nn.ModuleList([TransformerBlock(d_model, n_heads) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([TransformerBlock(d_model, n_heads, qkv_bias) for _ in range(n_layers)])
+        
+        # initialize parameters
+        nn.init.trunc_normal_(self.cls_token, std=.02)
     
     def forward(self, images: torch.Tensor):
         B, C, W, H = images.shape
         
         # embded each patch
         x = self.patch_embedding(images)
+        
+        # add class token
+        tokens_batch = self.cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((tokens_batch, x), dim=1)
         
         # add positional encoding
         x = self.positional_encoding(x, W, H)
@@ -172,4 +166,24 @@ class VisionTransformer(nn.Module):
         for block in self.blocks:
             x = block(x)
         
-        return x
+        self.tokens = x
+        
+        return self.tokens
+
+    def get_class_token(self) -> torch.Tensor:
+        """
+        Returns the most recent class token
+        """
+        if self.tokens:
+            return self.tokens[:, 0]
+
+        return None
+
+    def get_patch_tokens(self) -> torch.Tensor:
+        """
+        Returns the most recent patch_tokens
+        """
+        if self.tokens:
+            return self.tokens[:, 1:]
+
+        return None

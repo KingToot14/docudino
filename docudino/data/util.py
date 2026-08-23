@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def pad_image(image: torch.Tensor, stride: int) -> torch.Tensor:
+def pad_image(image: torch.Tensor, window_size: int, stride: int) -> torch.Tensor:
     """
     Pads the `image` to a multiple of `stride`. This creates a new copy of the tensor
     """
@@ -9,8 +9,8 @@ def pad_image(image: torch.Tensor, stride: int) -> torch.Tensor:
     # get size
     h, w = image.size()[-2:]
 
-    pad_w = (-w) % stride
-    pad_h = (-h) % stride
+    pad_w = max(window_size, (-w) % stride)
+    pad_h = max(window_size, (-h) % stride)
 
     return F.pad(image, [0, pad_w, 0, pad_h])
 

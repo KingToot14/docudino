@@ -1,1 +1,1 @@
-from .dataset import DocumentDataset
+from .dataset import DocumentDataset, DocumentSampler

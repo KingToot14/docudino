@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from attention import MultiHeadAttention
-from positional_encoding import LearnedPositionalEncoding
+from .attention import MultiHeadAttention
+from .positional_encoding import LearnedPositionalEncoding
 
 class PatchEmbeddings(nn.Module):
     """

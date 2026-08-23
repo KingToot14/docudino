@@ -134,5 +134,12 @@ class DocumentSampler(Sampler):
         for index in indices:
             _, patch_count, patch_start = self.data.images[index]
             
-            for i in range(patch_start, patch_start + patch_count):
-                yield i
+            patch_indices: torch.Tensor
+            
+            if self.shuffle:
+                patch_indices = torch.randperm(patch_count)
+            else:
+                patch_indices = torch.arange(0, patch_count)
+            
+            for patch_idx in patch_indices:
+                yield patch_idx + patch_start

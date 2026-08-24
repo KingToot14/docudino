@@ -1,1 +1,1 @@
-from .dataset import DocumentDataset, DocumentSampler
+from .dataset import DocumentDataset, DocumentSampler, make_transform

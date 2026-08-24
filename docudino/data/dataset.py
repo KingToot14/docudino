@@ -8,11 +8,23 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset, Sampler
 from torchvision.io import decode_image
+import torchvision.transforms.v2 as T
 
 from .util import pad_image, split_image
 
 # --- Constants --- #
 EXTENSIONS = [".png", ".jpg", ".jpeg"]
+
+# --- Functions --- #
+def make_transform(resize_size: int = 256):
+    to_tensor = T.ToImage()
+    resize = T.Resize((resize_size, resize_size), antialias=True)
+    to_float = T.ToDtype(torch.float32, scale=True)
+    normalize = T.Normalize(
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+    )
+    return T.Compose([to_tensor, resize, to_float, normalize])
 
 # --- Classes --- #
 class DocumentDataset(Dataset):
@@ -22,7 +34,7 @@ class DocumentDataset(Dataset):
     moving on to the next document.
     """
     
-    def __init__(self, root_dir: str | Path, window_size: int, stride: int, transform=None):
+    def __init__(self, root_dir: str | Path, window_size: int, stride: int, transform=make_transform(224)):
         """
         Args:
             root_dir (str | Path): The root directory to recursively load files from

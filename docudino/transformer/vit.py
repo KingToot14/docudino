@@ -103,11 +103,11 @@ class VisionTransformer(nn.Module):
     
     def __init__(self,
             d_model: int,
-            img_size: int,
             patch_size: int,
-            n_channels: int,
             n_heads: int,
             n_layers: int,
+            n_channels: int = 3,
+            img_size: int = 224,
             qkv_bias: bool = True,
         ):
         """

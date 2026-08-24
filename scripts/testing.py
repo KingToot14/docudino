@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms.functional import resize
 
-from docudino.transformer import dino_v1
+from docudino.model import dino_v1
 from docudino.data import DocumentDataset, DocumentSampler
 
 if __name__ == "__main__":
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     
     # load model
     DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = dino_v1.vit_small().to(DEVICE)
+    model = dino_v1.vit_small(d_head=8192).to(DEVICE)
     
     for image in tqdm(dataloader):
         image: torch.Tensor

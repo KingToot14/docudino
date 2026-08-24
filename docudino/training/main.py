@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-from docudino.transformer import dino_v1
+from docudino.model import dino_v1
 from docudino.data import DocumentDataset, DocumentSampler
 
 def train(config_file: str) -> None:
@@ -23,8 +23,8 @@ def train(config_file: str) -> None:
     
     # load model
     DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    student = dino_v1.vit_small().to(DEVICE)
-    teacher = dino_v1.vit_small().to(DEVICE)
+    student = dino_v1.vit_small(d_head=8192).to(DEVICE)
+    teacher = dino_v1.vit_small(d_head=8192).to(DEVICE)
     
     for image in tqdm(dataloader):
         image: torch.Tensor

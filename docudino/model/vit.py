@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from .attention import MultiHeadAttention
 from .positional_encoding import LearnedPositionalEncoding
+from .heads import DINOHead
 
 class PatchEmbeddings(nn.Module):
     """
@@ -102,7 +103,7 @@ class VisionTransformer(nn.Module):
     """
     
     def __init__(self, d_model: int, patch_size: int, n_heads: int,
-            n_layers: int, n_channels: int = 3, img_size: int = 224,
+            n_layers: int, d_head: int, n_channels: int = 3, img_size: int = 224,
             qkv_bias: bool = True):
         """
         Creates a new `nn.Module` that connects a few different components in order to implement a full
@@ -141,6 +142,9 @@ class VisionTransformer(nn.Module):
         self.blocks = nn.ModuleList([TransformerBlock(d_model, n_heads, qkv_bias) for _ in range(n_layers)])
         
         self.norm = nn.LayerNorm(d_model)
+        
+        # create heads
+        self.proj_head = DINOHead(d_model, d_head)
         
         # initialize parameters
         nn.init.trunc_normal_(self.cls_token, std=.02)
@@ -190,11 +194,11 @@ class VisionTransformer(nn.Module):
             if len(self.tokens) == 1:
                 self.tokens = self.tokens[0]
             
-            return self.tokens
+            return self.proj_head(output)
         else:
             self.tokens = self.process_images(images)
             
-            return self.tokens
+            return self.proj_head(self.tokens)
 
     def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:
         """

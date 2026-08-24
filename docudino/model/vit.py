@@ -76,7 +76,7 @@ class TransformerBlock(nn.Module):
         
         # sublayer 1: Multi-Head attention
         self.ln1 = nn.LayerNorm(d_model)
-        self.mha = MultiHeadAttention(d_model, n_heads, qkv_bias)
+        self.mha = MultiHeadAttention(d_model, n_heads, qkv_bias=qkv_bias)
         
         # sublayer 2: Multi-Layer Perceptron
         self.ln2 = nn.LayerNorm(d_model)
@@ -101,15 +101,9 @@ class VisionTransformer(nn.Module):
     positional encoding, and transformer blocks.
     """
     
-    def __init__(self,
-            d_model: int,
-            patch_size: int,
-            n_heads: int,
-            n_layers: int,
-            n_channels: int = 3,
-            img_size: int = 224,
-            qkv_bias: bool = True,
-        ):
+    def __init__(self, d_model: int, patch_size: int, n_heads: int,
+            n_layers: int, n_channels: int = 3, img_size: int = 224,
+            qkv_bias: bool = True):
         """
         Creates a new `nn.Module` that connects a few different components in order to implement a full
         Vision Transformer.
@@ -139,18 +133,20 @@ class VisionTransformer(nn.Module):
         
         # create a blank classification token
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        self.tokens: torch.Tensor = None
+        self.tokens: torch.Tensor | list[torch.Tensor] = None
         
         # create encoders
         self.patch_embedding = PatchEmbeddings(d_model, patch_size, n_channels)
         self.positional_encoding = LearnedPositionalEncoding(d_model, img_size, patch_size)
         self.blocks = nn.ModuleList([TransformerBlock(d_model, n_heads, qkv_bias) for _ in range(n_layers)])
         
+        self.norm = nn.LayerNorm(d_model)
+        
         # initialize parameters
         nn.init.trunc_normal_(self.cls_token, std=.02)
     
-    def forward(self, images: torch.Tensor):
-        B, C, W, H = images.shape
+    def process_images(self, images: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = images.shape
         
         # embded each patch
         x = self.patch_embedding(images)
@@ -166,24 +162,63 @@ class VisionTransformer(nn.Module):
         for block in self.blocks:
             x = block(x)
         
-        self.tokens = x
+        x = self.norm(x)
         
-        return self.tokens
+        return x
+    
+    def forward(self, images: torch.Tensor | list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
+        if isinstance(images, list):
+            # count number of unique resolutions
+            idx_crops = torch.cumsum(torch.unique_consecutive(
+                torch.tensor([img.shape[-1] for img in images]),
+                return_counts=True,
+            )[1], 0)
+            
+            # iterate through each batch
+            start_idx = 0
+            output: torch.Tensor = torch.empty(0).to(images[0].device)
+            self.tokens = []
+            
+            for end_idx in idx_crops:
+                out = self.process_images(torch.cat(images[start_idx:end_idx]))
+                self.tokens.append(out)
+                
+                output = torch.cat((output, out[:, 0]))
+                start_idx = end_idx
+            
+            # collapse single-resolution token lists
+            if len(self.tokens) == 1:
+                self.tokens = self.tokens[0]
+            
+            return self.tokens
+        else:
+            self.tokens = self.process_images(images)
+            
+            return self.tokens
 
-    def get_class_token(self) -> torch.Tensor:
+    def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:
         """
-        Returns the most recent class token
+        Returns the most recent batch of class tokens (if `forward` was called with
+        multiple image resolutions, this will be a list of batches)
         """
-        if self.tokens:
-            return self.tokens[:, 0]
+        
+        if self.tokens is not None:
+            if isinstance(self.tokens, list):
+                return [token[:, 0] for token in self.tokens]
+            else:
+                return self.tokens[:, 0]
 
         return None
 
-    def get_patch_tokens(self) -> torch.Tensor:
+    def get_patch_tokens(self) -> torch.Tensor | list[torch.Tensor]:
         """
         Returns the most recent patch_tokens
         """
-        if self.tokens:
-            return self.tokens[:, 1:]
+        
+        if self.tokens is not None:
+            if isinstance(self.tokens, list):
+                return [token[:, 1:] for token in self.tokens]
+            else:
+                return self.tokens[:, 1:]
 
         return None

@@ -1,17 +1,18 @@
-from time import sleep
-from tqdm import tqdm
-
 import torch
 from torch.utils.data import DataLoader
-from torchvision.transforms.functional import resize
+
+from tqdm import tqdm
 
 from docudino.transformer import dino_v1
 from docudino.data import DocumentDataset, DocumentSampler
 
-if __name__ == "__main__":
-    # load training data
+def train(config_file: str) -> None:
+    # TODO: parse config file
+    pass
+
+    # create dataset
     dataset = DocumentDataset("datasets/historical_wi/train", 256, 256)
-    
+        
     dataloader = DataLoader(
         dataset,
         sampler=DocumentSampler(dataset),
@@ -22,14 +23,13 @@ if __name__ == "__main__":
     
     # load model
     DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = dino_v1.vit_small().to(DEVICE)
+    student = dino_v1.vit_small().to(DEVICE)
+    teacher = dino_v1.vit_small().to(DEVICE)
     
     for image in tqdm(dataloader):
         image: torch.Tensor
         image = image.to(DEVICE, non_blocking=True)
         
-        tokens: torch.Tensor = model([image, resize(image, 128)])
-        
-        print(tokens, type(tokens))
+        tokens: torch.Tensor = student(image)
     
     print("Done processing")

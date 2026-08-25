@@ -177,40 +177,35 @@ class VisionTransformer(nn.Module):
         return x
     
     def forward(self, images: torch.Tensor | list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
-        if isinstance(images, list):
-            # count number of unique resolutions
-            idx_crops = torch.cumsum(torch.unique_consecutive(
-                torch.tensor([img.shape[-1] for img in images]),
-                return_counts=True,
-            )[1], 0)
-            
-            # iterate through each batch
-            start_idx = 0
-            output: torch.Tensor = torch.empty(0).to(images[0].device)
-            self.tokens = []
-            
-            for end_idx in idx_crops:
-                out = self.process_images(torch.cat(images[start_idx:end_idx]))
-                self.tokens.append(out)
-                
-                output = torch.cat((output, out[:, 0]))
-                start_idx = end_idx
-            
-            # collapse single-resolution token lists
-            if len(self.tokens) == 1:
-                self.tokens = self.tokens[0]
-            
-            if self.training:
-                return self.proj_head(output)
-            else:
-                return self.tokens
-        else:
+        # process tensors natively
+        if isinstance(images, torch.Tensor):
             self.tokens = self.process_images(images)
             
             if self.training:
-                return self.proj_head(self.tokens)
+                return self.proj_head(self.tokens[:, 0])
             else:
                 return self.tokens
+        
+        outputs = []
+        self.tokens = []
+        
+        # images should be pre-batched by resolution
+        for batch in images:
+            out = self.process_images(batch)
+            
+            self.tokens.append(out)
+            outputs.append(out[:, 0])
+        
+        output = torch.cat(outputs)
+        
+        # collapse single-resolution token lists
+        if len(self.tokens) == 1:
+            self.tokens = self.tokens[0]
+        
+        if self.training:
+            return self.proj_head(output)
+        else:
+            return self.tokens
 
     def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:
         """

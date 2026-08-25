@@ -20,10 +20,7 @@ class TrainingSystem:
 
         # set torch flags
         torch.backends.cudnn.benchmark = True
-        torch.backends.fp32_precision = "tf32"
-        torch.backends.cuda.matmul.fp32_precision = "tf32"
-        torch.backends.cudnn.fp32_precision = "tf32"
-        torch.backends.cudnn.conv.fp32_precision = "tf32"
+        # torch.backends.fp32_precision = "tf32"
 
         # create dataset
         transform = TrainingAugmentations(
@@ -51,8 +48,8 @@ class TrainingSystem:
         self.student = dino_v1.vit_small(d_head=8192, training=True).to(self.DEVICE)
         self.teacher = dino_v1.vit_small(d_head=8192, training=True).to(self.DEVICE)
         
-        # self.student.compile()
-        # self.teacher.compile()
+        self.student.compile(mode="max-autotune", backend="inductor")
+        self.teacher.compile(mode="max-autotune", backend="inductor")
         
         # loss and optimizer
         self.criterion = DINOLoss(self.student.d_head, 10, 0.07, 0.04, 10, 0.10, self.EPOCHS, 0.90).to(self.DEVICE)
@@ -77,8 +74,12 @@ class TrainingSystem:
             images: list[torch.Tensor] = [img.to(self.DEVICE, non_blocking=True) for img in images]
             
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                t_out: torch.Tensor = self.teacher(images[:2])
-                s_out: torch.Tensor = self.student(images)
+                g_views = torch.cat(images[:2])
+                l_views = torch.cat(images[2:])
+                
+                with torch.no_grad():
+                    t_out: torch.Tensor = self.teacher(g_views)
+                s_out: torch.Tensor = self.student([g_views, l_views])
                 
                 loss = self.criterion(s_out, t_out, epoch)
             

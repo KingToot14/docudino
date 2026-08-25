@@ -35,11 +35,11 @@ class DINOHead(nn.Module):
         # projection layer
         self.apply(self._init_weights)
         
-        self.last_layer = nn.utils.weight_norm(nn.Linear(d_bottleneck, d_head, bias=False))
-        self.last_layer.weight_g.data.fill_(1)
+        self.last_layer = nn.utils.parametrizations.weight_norm(nn.Linear(d_bottleneck, d_head, bias=False))
+        self.last_layer.parametrizations.weight.original0.data.fill_(1)
         
         if norm_last_layer:
-            self.last_layer.weight_g.requires_grad = False
+            self.last_layer.parametrizations.weight.original0.requires_grad = False
     
     def _init_weights(self, m: nn.Module) -> None:
         """

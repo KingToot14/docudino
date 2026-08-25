@@ -111,11 +111,12 @@ class VisionTransformer(nn.Module):
         
         Args:
             d_model (int): The dimensionality of the model
-            img_size (int): The standard image size accepted by this model
             patch_size (int): The patch size used for patch embeddings
-            n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
             n_heads (int): The number of heads to create in the `MultiHeadAttention` block 
             n_layers (int): The number of `TransformerBlock`s to create
+            d_head (int): The dimensionality of the projection
+            n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
+            img_size (int): The standard image size accepted by this model
             qkv_bias (bool): If `true`, the `qkv` projection will have a bias term
             training (bool): If `true`, this model will be considered in "training" mode. This primarily
                 adjusts what the `forward` function returns. During training, this is the DINO projection
@@ -130,10 +131,11 @@ class VisionTransformer(nn.Module):
         
         # store parameters
         self.d_model = d_model
-        self.img_size = img_size
         self.patch_size = patch_size
-        self.n_channels = n_channels
         self.n_heads = n_heads
+        self.d_head = d_head
+        self.n_channels = n_channels
+        self.img_size = img_size
         self.training = training
         
         # create a blank classification token

@@ -42,8 +42,10 @@ class LearnedPositionalEncoding(nn.Module):
         dim = x.shape[-1]
         
         # apparently this fixes something with floating point precision
-        w0 = w // self.patch_size + 0.1
-        h0 = h // self.patch_size + 0.1
+        w0 = w // self.patch_size
+        h0 = h // self.patch_size
+        
+        w0, h0 = w0 + 0.1, h0 + 0.1
         
         patch_pos_embed = nn.functional.interpolate(
             # (batch, patch, dim) -> (batch, w, h, dim) -> (batch, dim, w, h)
@@ -55,4 +57,4 @@ class LearnedPositionalEncoding(nn.Module):
         # (batch, dim, w, h) -> (batch, w, h, dim) -> (batch, patch, dim)
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
         
-        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
+        return x + torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)

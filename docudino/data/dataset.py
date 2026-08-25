@@ -16,15 +16,21 @@ from .util import pad_image, split_image
 EXTENSIONS = [".png", ".jpg", ".jpeg"]
 
 # --- Functions --- #
-def make_transform(resize_size: int = 256):
-    to_tensor = T.ToImage()
-    resize = T.Resize((resize_size, resize_size), antialias=True)
-    to_float = T.ToDtype(torch.float32, scale=True)
-    normalize = T.Normalize(
-        mean=(0.485, 0.456, 0.406),
-        std=(0.229, 0.224, 0.225),
-    )
-    return T.Compose([to_tensor, resize, to_float, normalize])
+def standard_transform(resize_size: int = 224):
+    """
+    Defines a standard DINO-style transformation that converts an image to a tensor,
+    resizes it, and normalizes it
+    """
+    
+    return T.Compose([
+        T.ToImage(),
+        T.Resize((resize_size, resize_size), antialias=True),
+        T.ToDtype(torch.float32, scale=True),
+        T.Normalize(
+            mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225),
+        ),
+    ])
 
 # --- Classes --- #
 class DocumentDataset(Dataset):
@@ -34,12 +40,13 @@ class DocumentDataset(Dataset):
     moving on to the next document.
     """
     
-    def __init__(self, root_dir: str | Path, window_size: int, stride: int, transform=make_transform(224)):
+    def __init__(self, root_dir: str | Path, window_size: int, stride: int, transform=standard_transform(224)):
         """
         Args:
             root_dir (str | Path): The root directory to recursively load files from
             window_size (int): How large each window sample should be (square crop)
             stride (int): How much the pointer should move between samples
+            transform: The transform to apply to each collected sample
         """
         
         self.window_size = window_size

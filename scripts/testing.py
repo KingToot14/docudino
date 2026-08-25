@@ -6,11 +6,16 @@ from torch.utils.data import DataLoader
 from torchvision.transforms.functional import resize
 
 from docudino.model import dino_v1
-from docudino.data import DocumentDataset, DocumentSampler
+from docudino.data import DocumentDataset, DocumentSampler, TrainingAugmentations
 
 if __name__ == "__main__":
     # load training data
-    dataset = DocumentDataset("datasets/historical_wi/train", 256, 256)
+    transform = TrainingAugmentations(
+        (0.40, 1.00),
+        (0.10, 0.40),
+        8,
+    )
+    dataset = DocumentDataset("datasets/historical_wi/train", 256, 256, transform=transform)
     
     dataloader = DataLoader(
         dataset,
@@ -22,13 +27,13 @@ if __name__ == "__main__":
     
     # load model
     DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = dino_v1.vit_small(d_head=8192).to(DEVICE)
+    model = dino_v1.vit_small(d_head=8192, training=True).to(DEVICE)
     
-    for image in tqdm(dataloader):
-        image: torch.Tensor
-        image = image.to(DEVICE, non_blocking=True)
+    for images in tqdm(dataloader):
+        images: torch.Tensor
+        images = [img.to(DEVICE, non_blocking=True) for img in images]
         
-        tokens: torch.Tensor = model([image, resize(image, 128)])
+        tokens: torch.Tensor = model(images)
         
         print(tokens, type(tokens))
     

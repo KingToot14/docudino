@@ -104,7 +104,7 @@ class VisionTransformer(nn.Module):
     
     def __init__(self, d_model: int, patch_size: int, n_heads: int,
             n_layers: int, d_head: int, n_channels: int = 3, img_size: int = 224,
-            qkv_bias: bool = True):
+            qkv_bias: bool = True, training: bool = False):
         """
         Creates a new `nn.Module` that connects a few different components in order to implement a full
         Vision Transformer.
@@ -116,7 +116,10 @@ class VisionTransformer(nn.Module):
             n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
             n_heads (int): The number of heads to create in the `MultiHeadAttention` block 
             n_layers (int): The number of `TransformerBlock`s to create
-            qkv_bias (bool): If true, the `qkv` projection will have a bias term
+            qkv_bias (bool): If `true`, the `qkv` projection will have a bias term
+            training (bool): If `true`, this model will be considered in "training" mode. This primarily
+                adjusts what the `forward` function returns. During training, this is the DINO projection
+                head. Otherwise, this is just the list of tokens
         """
         
         super().__init__()
@@ -131,6 +134,7 @@ class VisionTransformer(nn.Module):
         self.patch_size = patch_size
         self.n_channels = n_channels
         self.n_heads = n_heads
+        self.training = training
         
         # create a blank classification token
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -194,11 +198,17 @@ class VisionTransformer(nn.Module):
             if len(self.tokens) == 1:
                 self.tokens = self.tokens[0]
             
-            return self.proj_head(output)
+            if self.training:
+                return self.proj_head(output)
+            else:
+                return self.tokens
         else:
             self.tokens = self.process_images(images)
             
-            return self.proj_head(self.tokens)
+            if self.training:
+                return self.proj_head(self.tokens)
+            else:
+                return self.tokens
 
     def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:
         """

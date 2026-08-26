@@ -31,6 +31,8 @@ class TrainingSystem:
     def __init__(self, config_file: str):
         # TODO: parse config file
         pass
+    
+        self.freeze_layer = 1
 
         # setup DDP
         self.LOCAL_RANK = setup_ddp()
@@ -159,6 +161,14 @@ class TrainingSystem:
             # student update
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            
+            # clip gradient and freeze last layer
+            torch.nn.utils.clip_grad_norm_(self.student_no_ddp.parameters(), 3.0)
+            if epoch < self.freeze_layer:
+                for n, p in self.student_no_ddp.named_parameters():
+                    if "last_layer" in n:
+                        p.grad = None
+            
             self.optimizer.step()
             
             # EMA teacher update
@@ -175,7 +185,8 @@ class TrainingSystem:
         
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
         
-        print(f"Loss: {running_loss / len(self.dataloader)}")
+        if self.LOCAL_RANK == 0:
+            print(f"Loss: {running_loss / len(self.dataloader)}")
 
 if __name__ == "__main__":
     training = TrainingSystem("")

@@ -11,7 +11,8 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-from .util import get_params_groups, cosine_scheduler, load_config_file
+from .util import get_params_groups, cosine_scheduler
+from .config import load_config_file, DocuDINOConfig
 from .dino_loss import DINOLoss
 from docudino.model import dino_v1
 from docudino.data import DocumentDataset, DistributedDocumentSampler, TrainingAugmentations
@@ -29,9 +30,9 @@ def setup_ddp() -> None:
     return local_rank
 
 class TrainingSystem:
-    def __init__(self, config_file: str):
+    def __init__(self, config_file: str, overrides: list[str]):
         # parse config file
-        self.cfg = load_config_file(config_file)
+        self.cfg = load_config_file(config_file, overrides)
     
         self.freeze_layer = 1
 
@@ -44,12 +45,15 @@ class TrainingSystem:
 
         # create dataset
         transform = TrainingAugmentations(
-            (0.40, 1.00),
-            (0.10, 0.40),
-            8,
+            self.cfg.dataset.global_view_scale,
+            self.cfg.dataset.local_view_scale,
+            self.cfg.dataset.local_views,
         )
         
-        self.dataset = DocumentDataset("datasets/historical_wi/train", 256, 256, transform=transform)
+        self.dataset = DocumentDataset(
+            "datasets/historical_wi/train",
+            self.cfg.dataset.window_size, self.cfg.dataset.window_stride,
+            transform=transform)
         
         self.dataloader = DataLoader(
             self.dataset,
@@ -61,7 +65,6 @@ class TrainingSystem:
             num_workers=4,
             prefetch_factor=3,
             pin_memory=True,
-            drop_last=True,
         )
         
         self.EPOCHS = 30
@@ -200,10 +203,10 @@ if __name__ == "__main__":
         "config", help="The location of the config file to load for training"
     )
     
-    args = parser.parse_args()
+    args, overrides = parser.parse_known_args()
     
     # create training system
-    training = TrainingSystem(args.config)
+    training = TrainingSystem(args.config, overrides)
     
     # start training
     training.train()

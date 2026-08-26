@@ -1,3 +1,9 @@
-test:
-  value: 0.3
-  other_value: 2.0
+dataset:
+  root: datasets/historical_wi/train
+  window_size: 256
+  window_stride: 256
+  global_view_scale: [0.4, 1.0]
+  local_view_scale: [0.1, 0.4]
+  local_views: 8
+  batch_size: 128
+  num_workers: 4

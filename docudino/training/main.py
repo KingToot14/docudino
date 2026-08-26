@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+from argparse import ArgumentParser
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-from .util import get_params_groups, cosine_scheduler
+from .util import get_params_groups, cosine_scheduler, load_config_file
 from .dino_loss import DINOLoss
 from docudino.model import dino_v1
 from docudino.data import DocumentDataset, DistributedDocumentSampler, TrainingAugmentations
@@ -29,8 +30,8 @@ def setup_ddp() -> None:
 
 class TrainingSystem:
     def __init__(self, config_file: str):
-        # TODO: parse config file
-        pass
+        # parse config file
+        self.cfg = load_config_file(config_file)
     
         self.freeze_layer = 1
 
@@ -189,6 +190,20 @@ class TrainingSystem:
             print(f"Loss: {running_loss / len(self.dataloader)}")
 
 if __name__ == "__main__":
-    training = TrainingSystem("")
+    # parse config file location
+    parser = ArgumentParser(
+        "DocuDINO Training",
+        description="A DINO-style training system designed specifically for historical, handwritten documents",
+    )
     
+    parser.add_argument(
+        "config", help="The location of the config file to load for training"
+    )
+    
+    args = parser.parse_args()
+    
+    # create training system
+    training = TrainingSystem(args.config)
+    
+    # start training
     training.train()

@@ -15,4 +15,5 @@ export OMP_NUM_THREADS=1
     --standalone \
     --rdzv-backend=c10d \
     --rdzv-endpoint=localhost:0 \
-    -m docudino.training.main
+    -m docudino.training.main \
+        "$@"

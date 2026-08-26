@@ -1,3 +1,6 @@
+from pathlib import Path
+from omegaconf import OmegaConf, DictConfig
+
 import torch.nn as nn
 
 import numpy as np
@@ -62,3 +65,19 @@ def cosine_scheduler(start_value: float, end_value: float, epochs: int, iters_pe
     assert len(schedule) == epochs * iters_per_epoch, "Schedule does not match the expected number of iterations"
     
     return schedule
+
+def load_config_file(file: str | Path) -> DictConfig:
+    """
+    Parses the YAML config file localed at `file`, and overwrites from command-line arguments
+    
+    Args:
+        file (str | Path): The config file's location
+    
+    Returns:
+        DictConfig: the merged config object
+    """
+    
+    config = OmegaConf.load(file)
+    cli_config = OmegaConf.from_cli()
+    
+    return OmegaConf.merge(config, cli_config)

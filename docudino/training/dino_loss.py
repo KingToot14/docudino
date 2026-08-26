@@ -73,9 +73,9 @@ class DINOLoss(nn.Module):
     def update_center(self, t_out: torch.Tensor) -> None:
         # sum all batches from all GPUs
         batch_center = torch.sum(t_out, dim=0, keepdim=True)
-        # dist.all_reduce(batch_center)
+        dist.all_reduce(batch_center)
         
         # calculate average output
-        batch_center /= (len(t_out)) # * dist.get_world_size()
+        batch_center /= (len(t_out) * dist.get_world_size())
         
         self.center = (self.center_momentum * self.center) + ((1.0 - self.center_momentum) * batch_center)

@@ -1,4 +1,5 @@
 import math
+import random
 from pathlib import Path
 
 from bisect import bisect_right
@@ -162,3 +163,116 @@ class DocumentSampler(Sampler):
             
             for patch_idx in patch_indices:
                 yield patch_idx + patch_start
+        
+
+class DistributedDocumentSampler(Sampler):
+    """
+    A `Sampler` that's aware of the optimization requires of `DocumentDatabase` i.e. loading
+    all windows of a document before moving on to another document. This specific version also
+    handles distrbuted data across multiple GPU processes
+    """
+    
+    def __init__(self, data: DocumentDataset, batch_size: int, shuffle: bool = True,
+                 rank: int = 0, num_replicas: int = 1, seed: int = random.randint(0, 2**16 - 1)):
+        """
+        Args:
+            data (DocumentDataset): The dataset to sample from
+            shuffle (bool): If `true`, the document load order will be randomized between
+                each epoch
+        """
+        self.data = data
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        
+        self.rank = rank
+        self.num_replicas = num_replicas
+        
+        self.seed = seed
+        
+        self.epoch = 0
+        self.assigned_documents = None
+        self.target_patches = 0
+        
+        self.set_epoch(0)
+    
+    def set_epoch(self, epoch: int) -> None:
+        """
+        Sets the current training epoch. This is used for deterministic seeding
+        """
+        
+        self.epoch = epoch
+        
+        # create deterministic generator
+        self.generator = torch.Generator()
+        self.generator.manual_seed(self.seed + self.epoch)
+        
+        # shuffle documents
+        indices: torch.Tensor
+        
+        if self.shuffle:
+            indices = torch.randperm(self.data.image_count, generator=self.generator)
+        else:
+            indices = torch.arange(0, self.data.image_count)
+        
+        # only keep this GPU's indicies
+        self._distribute_indices(indices)
+    
+    def __len__(self):
+        return self.target_patches
+    
+    def __iter__(self):
+        yielded_docs = 0
+        
+        # iterate through each document
+        for index in self.assigned_documents:
+            _, patch_count, patch_start = self.data.images[index]
+            
+            # shuffle windows
+            patch_indices: torch.Tensor
+            
+            if self.shuffle:
+                patch_indices = torch.randperm(patch_count, generator=self.generator)
+            else:
+                patch_indices = torch.arange(0, patch_count)
+            
+            # yield each window
+            for patch_idx in patch_indices:
+                if yielded_docs >= self.target_patches:
+                    return
+                
+                yield patch_idx + patch_start
+                
+                yielded_docs += 1
+    
+    def _distribute_indices(self, indices: torch.Tensor) -> torch.Tensor:
+        """
+        Evenly distributes the shuffled document `indices` by their patch size using a greedy
+        "Longest Processing Time" algorithm. This also guarantees that each dataloader will
+        have the exact same number of batches, which is very important for DDP.
+        
+        Args:
+            indices (torch.Tensor): The shuffled document indices
+        """
+        
+        rank_documents = [[] for _ in range(self.num_replicas)]
+        rank_patches = [0] * self.num_replicas
+        
+        # greedily assign all documents to ranks
+        for index in sorted(indices, key=lambda i: self.data.images[i][1], reverse=True):
+            _, patch_count, _ = self.data.images[index]
+            
+            # gets the minimum rank by their value in 'rank_patches'
+            rank = min(range(self.num_replicas), key=rank_patches.__getitem__)
+            
+            rank_documents[rank].append(index)
+            rank_patches[rank] += patch_count
+        
+        # make sure each rank has the same number of documents
+        rank_patches = [patch / self.batch_size for patch in rank_patches]
+        
+        min_batch = int(min(rank_patches))
+        self.target_patches = min_batch * self.batch_size
+        
+        self. assigned_documents = indices[torch.isin(
+            indices, torch.tensor(rank_documents[self.rank]), assume_unique=True
+        )]

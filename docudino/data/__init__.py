@@ -1,2 +1,2 @@
-from .dataset import DocumentDataset, DocumentSampler
+from .dataset import DocumentDataset, DocumentSampler, DistributedDocumentSampler
 from .augmentations import TrainingAugmentations

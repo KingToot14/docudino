@@ -179,32 +179,36 @@ class VisionTransformer(nn.Module):
     def forward(self, images: torch.Tensor | list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
         # process tensors natively
         if isinstance(images, torch.Tensor):
-            self.tokens = self.process_images(images)
+            tokens = self.process_images(images)
             
             if self.training:
-                return self.proj_head(self.tokens[:, 0])
+                return self.proj_head(tokens[:, 0])
             else:
+                self.tokens = tokens
+                
                 return self.tokens
         
         outputs = []
-        self.tokens = []
+        tokens = []
         
         # images should be pre-batched by resolution
         for batch in images:
             out = self.process_images(batch)
             
-            self.tokens.append(out)
+            tokens.append(out)
             outputs.append(out[:, 0])
         
         output = torch.cat(outputs)
         
         # collapse single-resolution token lists
-        if len(self.tokens) == 1:
-            self.tokens = self.tokens[0]
+        if len(tokens) == 1:
+            tokens = tokens[0]
         
         if self.training:
             return self.proj_head(output)
         else:
+            self.tokens = tokens
+            
             return self.tokens
 
     def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:

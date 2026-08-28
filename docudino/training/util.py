@@ -57,7 +57,7 @@ def cosine_scheduler(start_value: float, end_value: float, epochs: int, iters_pe
     iters = np.arange(epochs * iters_per_epoch - warmup_iters)
     schedule = end_value + 0.5 * (start_value - end_value) * (1.0 + np.cos(np.pi * iters / len(iters)))
     
-    schedule = np.concat([warmup_schedule, schedule])
+    schedule = np.concatenate([warmup_schedule, schedule])
     
     assert len(schedule) == epochs * iters_per_epoch, "Schedule does not match the expected number of iterations"
     

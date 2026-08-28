@@ -33,8 +33,6 @@ class TrainingSystem:
     def __init__(self, config_file: str, overrides: list[str]):
         # parse config file
         self.cfg = load_config_file(config_file, overrides)
-    
-        self.freeze_layer = 1
 
         # setup DDP
         self.LOCAL_RANK = setup_ddp()
@@ -58,51 +56,68 @@ class TrainingSystem:
         self.dataloader = DataLoader(
             self.dataset,
             sampler=DistributedDocumentSampler(
-                self.dataset, 128,
+                self.dataset, self.cfg.dataset.batch_size,
                 rank=self.LOCAL_RANK, num_replicas=self.WORLD_SIZE
             ),
-            batch_size=128,
-            num_workers=4,
-            prefetch_factor=3,
+            batch_size=self.cfg.dataset.batch_size,
+            num_workers=self.cfg.dataset.num_workers,
+            prefetch_factor=self.cfg.dataset.prefetch_factor,
             pin_memory=True,
         )
         
-        self.EPOCHS = 30
+        self.EPOCHS = self.cfg.training.epochs
         
         # load model
         self.DEVICE = torch.device(f"cuda:{self.LOCAL_RANK}")
-        self.student = dino_v1.vit_small(d_head=8192, training=True).to(self.DEVICE)
-        self.teacher = dino_v1.vit_small(d_head=8192, training=True).to(self.DEVICE)
+        self.student = dino_v1.vit_small(
+            d_head=self.cfg.model.dino_head_dimensions,
+            training=True,
+        ).to(self.DEVICE)
+        self.teacher = dino_v1.vit_small(
+            d_head=self.cfg.model.dino_head_dimensions,
+            training=True,
+        ).to(self.DEVICE)
         
         # compile and set to DDP
-        self.student.compile(mode="max-autotune-no-cudagraphs", backend="inductor")
-        self.teacher.compile(mode="max-autotune-no-cudagraphs", backend="inductor")
+        if self.cfg.model.compile_mode != 'none':
+            self.student.compile(mode=self.cfg.model.compile_mode, backend=self.cfg.model.compile_backend) 
+            self.teacher.compile(mode=self.cfg.model.compile_mode, backend=self.cfg.model.compile_backend) 
         
         self.student_no_ddp = self.student
         self.student = nn.parallel.DistributedDataParallel(self.student, device_ids=[self.LOCAL_RANK])
+        
+        self.teacher_no_ddp = self.teacher
+        self.teacher = nn.parallel.DistributedDataParallel(self.teacher, device_ids=[self.LOCAL_RANK])
         
         for p in self.teacher.parameters():
             p.requires_grad_(False)
         
         # loss and optimizer
-        self.criterion = DINOLoss(self.student_no_ddp.d_head, 10, 0.07, 0.04, 10, 0.10, self.EPOCHS, 0.90).to(self.DEVICE)
+        self.criterion = DINOLoss(
+            self.student_no_ddp.d_head,
+            2 + self.cfg.dataset.local_views,
+            self.cfg.teacher.temp_end, self.cfg.teacher.temp_start, self.cfg.teacher.warmup_epochs,
+            self.cfg.student.temp,
+            self.EPOCHS, self.cfg.teacher.center_momentum
+        ).to(self.DEVICE)
+        
         self.optimizer = optim.AdamW(get_params_groups(self.student_no_ddp))
         
         # create schedulers
         self.weight_decay = cosine_scheduler(
-            0.04, 0.4,
+            self.cfg.model.weight_decay_start, self.cfg.model.weight_decay_end,
             self.EPOCHS, len(self.dataloader),
         )
         
         # TODO: add config file
         self.learning_rate = cosine_scheduler(
-            5e-4 * (128 / 256), 0.0,
+            self.cfg.model.learning_rate * (self.cfg.dataset.batch_size * self.WORLD_SIZE / 256), 0.0,
             self.EPOCHS, len(self.dataloader),
-            10, 0.0,
+            self.cfg.model.learning_rate_warmup_epochs, 0.0,
         )
         
         self.momentum = cosine_scheduler(
-            0.996, 1.0,
+            self.cfg.teacher.ema_momentum_start, self.cfg.teacher.ema_momentum_end,
             self.EPOCHS, len(self.dataloader),
         )
     
@@ -158,8 +173,10 @@ class TrainingSystem:
                 
                 loss = self.criterion(s_out, t_out, epoch)
             
-            if not math.isfinite(loss.item()):
-                print(f"Loss is non-finite: '{loss.item()}', stopping training")
+            loss_value = loss.item()
+            
+            if not math.isfinite(loss_value):
+                print(f"Loss is non-finite: '{loss_value}', stopping training")
                 sys.exit(1)
             
             # student update
@@ -168,7 +185,7 @@ class TrainingSystem:
             
             # clip gradient and freeze last layer
             torch.nn.utils.clip_grad_norm_(self.student_no_ddp.parameters(), 3.0)
-            if epoch < self.freeze_layer:
+            if epoch < self.cfg.model.frozen_epochs:
                 for n, p in self.student_no_ddp.named_parameters():
                     if "last_layer" in n:
                         p.grad = None
@@ -183,14 +200,14 @@ class TrainingSystem:
                 for param_s, param_t in zip(self.student_no_ddp.parameters(), self.teacher.parameters()):
                     param_t.data.mul_(momentum).add_((1.0 - momentum) * param_s.detach().data)
 
-            running_loss += loss.item()
+            running_loss += loss_value
         
         loss_sum = torch.tensor(running_loss, device=self.DEVICE)
         
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
         
         if self.LOCAL_RANK == 0:
-            print(f"Loss: {running_loss / len(self.dataloader)}")
+            print(f"Loss: {loss_sum / (len(self.dataloader) * self.WORLD_SIZE)}")
 
 if __name__ == "__main__":
     # parse config file location

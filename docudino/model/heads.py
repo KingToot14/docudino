@@ -32,24 +32,16 @@ class DINOHead(nn.Module):
             
             self.mlp = nn.Sequential(*layers)
         
-        # projection layer
-        self.apply(self._init_weights)
-        
-        self.last_layer = nn.utils.parametrizations.weight_norm(nn.Linear(d_bottleneck, d_head, bias=False))
-        self.last_layer.parametrizations.weight.original0.data.fill_(1)
-        
+        # projection layer using weight normalization
+        self.last_layer = nn.utils.weight_norm(nn.Linear(d_bottleneck, d_head, bias=False))
+
+        # initialize weight_v (the underlying weights) with small random values
+        # and set the scaling parameter weight_g to 1 (as in DINO implementations)
+        nn.init.normal_(self.last_layer.weight_v, std=0.05)
+        self.last_layer.weight_g.data.fill_(10)
+
         if norm_last_layer:
-            self.last_layer.parametrizations.weight.original0.requires_grad = False
-    
-    def _init_weights(self, m: nn.Module) -> None:
-        """
-        Initializes the MLP's linear weights
-        """
-        
-        if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=0.2)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+            self.last_layer.weight_g.requires_grad = False
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mlp(x)

@@ -10,9 +10,10 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from tqdm import tqdm
+import wandb
 
 from .util import get_params_groups, cosine_scheduler
-from .config import load_config_file, DocuDINOConfig
+from .config import load_config_file
 from .dino_loss import DINOLoss
 from docudino.model import dino_v1
 from docudino.data import DocumentDataset, DistributedDocumentSampler, TrainingAugmentations
@@ -78,19 +79,21 @@ class TrainingSystem:
             training=True,
         ).to(self.DEVICE)
         
+        self.teacher.load_state_dict(self.student.state_dict())
+        
+        for p in self.teacher.parameters():
+            p.requires_grad_(False)
+        
         # compile and set to DDP
         if self.cfg.model.compile_mode != 'none':
+            if self.LOCAL_RANK == 0:
+                print("NOTE: `torch.compile` is active, so first epoch may take a while (5+ minutes)")
+            
             self.student.compile(mode=self.cfg.model.compile_mode, backend=self.cfg.model.compile_backend) 
             self.teacher.compile(mode=self.cfg.model.compile_mode, backend=self.cfg.model.compile_backend) 
         
         self.student_no_ddp = self.student
         self.student = nn.parallel.DistributedDataParallel(self.student, device_ids=[self.LOCAL_RANK])
-        
-        self.teacher_no_ddp = self.teacher
-        self.teacher = nn.parallel.DistributedDataParallel(self.teacher, device_ids=[self.LOCAL_RANK])
-        
-        for p in self.teacher.parameters():
-            p.requires_grad_(False)
         
         # loss and optimizer
         self.criterion = DINOLoss(
@@ -124,18 +127,16 @@ class TrainingSystem:
     def train(self):
         print(f"Starting DINO training (Process {self.LOCAL_RANK})")
         
-        if self.LOCAL_RANK == 0:
-            print("NOTE: `torch.compile` is active, so first epoch may take a while (5+ minutes)")
-        
-        for epoch in range(self.EPOCHS):
-            self.dataloader.sampler.set_epoch(epoch)
-            self.train_epoch(epoch)
+        with wandb.init(project="DocuDINO") as run:
+            for epoch in range(self.EPOCHS):
+                self.dataloader.sampler.set_epoch(epoch)
+                self.train_epoch(epoch, run)
         
         print(f"Done training (Process {self.LOCAL_RANK})")
         
         dist.destroy_process_group()
     
-    def train_epoch(self, epoch: int):
+    def train_epoch(self, epoch: int, run: wandb.Run = None):
         if self.LOCAL_RANK == 0:
             print(f"Training ({epoch}/{self.EPOCHS})")
         
@@ -171,7 +172,7 @@ class TrainingSystem:
                     t_out: torch.Tensor = self.teacher(g_views)
                 s_out: torch.Tensor = self.student([g_views, l_views])
                 
-                loss = self.criterion(s_out, t_out, epoch)
+                loss, metrics = self.criterion(s_out, t_out, epoch, run is not None)
             
             loss_value = loss.item()
             
@@ -184,7 +185,7 @@ class TrainingSystem:
             loss.backward()
             
             # clip gradient and freeze last layer
-            torch.nn.utils.clip_grad_norm_(self.student_no_ddp.parameters(), 3.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.student_no_ddp.parameters(), 3.0)
             if epoch < self.cfg.model.frozen_epochs:
                 for n, p in self.student_no_ddp.named_parameters():
                     if "last_layer" in n:
@@ -201,6 +202,15 @@ class TrainingSystem:
                     param_t.data.mul_(momentum).add_((1.0 - momentum) * param_s.detach().data)
 
             running_loss += loss_value
+            
+            # update W&B
+            if run:
+                metrics['loss'] = loss_value
+                metrics['optimization/learning_rate'] = self.learning_rate[it]
+                metrics['optimization/weight_decay'] = self.weight_decay[it]
+                metrics['optimization/grad_norm'] = grad_norm.item()
+                
+                run.log(metrics)
         
         loss_sum = torch.tensor(running_loss, device=self.DEVICE)
         

@@ -4,18 +4,20 @@ import torch
 import torchvision.transforms.v2 as T
 
 class ErodeDilateAugmentation(object):
-    def __init__(self, kernel_size: int = 3, p: float = 0.2):
+    def __init__(self, kernel_size: int = 3, n_ones: int = 4, p: float = 0.5):
         """
         Randomly applies erosion or dilation to the input `image` with a kernel of `kernel_size`
         
         Args:
             image (torch.Tensor): The image to erode or dilate
+            n_ones (int): The maximum number of 1's that can be randomly set in the kernel
             kernel_size (int): How large of a kernel to consider. Defaults to 3
             p (float): The odds of this augmentation activating. When activated, either erosion
                 or dilation will occur with a 50/50 chance (mutually exclusive)
         """
         
         self.kernel_size = kernel_size
+        self.n_ones = n_ones
         self.p = p
     
     def __call__(self, image: torch.Tensor):
@@ -23,11 +25,20 @@ class ErodeDilateAugmentation(object):
         if random.random() > self.p:
             return image
 
-        kernel = torch.ones(
+        # create base kernel
+        kernel = torch.zeros(
             1, 1, self.kernel_size, self.kernel_size,
             device=image.device,
             dtype=image.dtype,
         )
+        
+        # randomize kernel
+        positions = random.sample(range(9), self.n_ones)
+        for pos in positions:
+            row = pos // 3
+            col = pos % 3
+            
+            kernel[0, 0, row, col] = 1
         
         # erode
         if random.random() < 0.50:

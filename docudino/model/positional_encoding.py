@@ -26,7 +26,7 @@ class LearnedPositionalEncoding(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, (img_size // patch_size) ** 2 + 1, d_model))
         
         # initialize parameters
-        nn.init.trunc_normal_(self.pos_embed, std=.02)
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
     
     def forward(self, x: torch.Tensor, w: int, h: int):
         n_patches = x.shape[1] - 1

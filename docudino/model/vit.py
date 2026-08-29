@@ -153,7 +153,21 @@ class VisionTransformer(nn.Module):
         self.proj_head = DINOHead(d_model, d_head)
         
         # initialize parameters
-        nn.init.trunc_normal_(self.cls_token, std=.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, m: nn.Module) -> None:
+        """
+        Initializes the MLP's linear weights
+        """
+        
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0.0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0.0)
+            nn.init.constant_(m.weight, 1.0)
     
     def process_images(self, images: torch.Tensor) -> torch.Tensor:
         B, C, H, W = images.shape

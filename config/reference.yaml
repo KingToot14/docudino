@@ -3,28 +3,28 @@ dataset:
   window_size: 256
   window_stride: 256
   global_view_scale: [0.4, 1.0]
-  local_view_scale: [0.1, 0.4]
+  local_view_scale: [0.05, 0.4]
   local_views: 8
   batch_size: 128
   num_workers: 4
   prefetch_factor: 3
 model:
   frozen_epochs: 1
-  dino_head_dimensions: 8192
+  dino_head_dimensions: 1024
   weight_decay_start: 0.04
   weight_decay_end: 0.40
-  learning_rate: 5e-4
-  learning_rate_warmup_epochs: 10
-  compile_mode: 'max-autotune-no-cudagraphs'
+  learning_rate: 5e-3
+  learning_rate_warmup_epochs: 2
+  compile_mode: 'default'
   compile_backend: 'inductor'
 student:
   temp: 0.10
 teacher: 
   temp_start: 0.04
   temp_end: 0.07
-  warmup_epochs: 10
+  warmup_epochs: 20
   center_momentum: 0.90
   ema_momentum_start: 0.996
   ema_momentum_end: 1.0
 training:
-  epochs: 100
+  epochs: 20

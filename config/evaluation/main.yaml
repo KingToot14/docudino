@@ -1,0 +1,23 @@
+dataset:
+  root: datasets/historical_wi/train
+  window_size: 224
+  window_stride: 224
+  batch_size: 128
+  num_workers: 4
+  prefetch_factor: 3
+extract:
+  train_stride: 224
+  test_stride: 56
+training:
+  samples_per_document: 512
+  codebook_iterations: 250
+  codebook_clusters: 100
+  pca_dimensions: 384
+evaluation:
+  metrics:
+  - topk:1
+  - topk:5
+  - topk:10
+  - mAP
+  - mAP:5
+  - mAP:10

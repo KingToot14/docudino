@@ -93,7 +93,7 @@ class DINOLoss(nn.Module):
         if do_metrics:
             return total_loss, metrics
         else:
-            return total_loss
+            return total_loss, {}
 
     @torch.no_grad()
     def ddp_mean(self, value: torch.Tensor) -> torch.Tensor:

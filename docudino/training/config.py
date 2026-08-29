@@ -4,8 +4,9 @@ from omegaconf import OmegaConf, DictConfig
 from typing import List
 from dataclasses import dataclass, field
 
+# --- Training Config --- #
 @dataclass
-class DatasetConfig:
+class TrainingDatasetConfig:
     """
     Stores config info for the training dataset
     """
@@ -92,14 +93,22 @@ class TrainingConfig:
     epochs: int = 30
     """How many epochs to train for"""
     
-
 @dataclass
-class DocuDINOConfig:
+class LoggingConfig:
     """
-    Stores config info for all of DocuDINO
+    Stores config info about logging
     """
     
-    dataset: DatasetConfig = field(default_factory=lambda: DatasetConfig())
+    wandb: bool = True
+    """If `True`, Weights & Biases output will be used"""
+
+@dataclass
+class DocuDINOTrainingConfig:
+    """
+    Stores config info for DocuDINO's training pipeline
+    """
+    
+    dataset: TrainingDatasetConfig = field(default_factory=lambda: TrainingDatasetConfig())
     """The dataset-specific config info"""
     
     model: ModelConfig = field(default_factory=lambda: ModelConfig())
@@ -112,8 +121,42 @@ class DocuDINOConfig:
     
     training: TrainingConfig = field(default_factory=lambda: TrainingConfig())
     """The training config info"""
+    
+    logging: LoggingConfig = field(default_factory=lambda: LoggingConfig())
+    """The logging config info"""
 
-def load_config_file(file: str | Path, overrides: list[str]) -> DocuDINOConfig:
+# --- Evaluation Config --- #
+@dataclass
+class EvaluationDatasetConfig:
+    """
+    Stores config info for the evaluation dataset
+    """
+    
+    root: str = ""
+    """The root filepath of the evaluation dataset"""
+    window_size: int = 224
+    """The size of the windows to slice from each image in the dataset"""
+    window_stride: int = 224
+    """The distance to move when slicing multiple windows from an image. A value equal
+    to `window_size` means it slices a perfectly non-overlapping collection of windows"""
+    batch_size: int = 128
+    """How many windows should be included in a single batch. Increases throughput and memory usage"""
+    num_workers: int = 4
+    """How many CPU workers to create when loading the dataset"""
+    prefetch_factor: int = 3
+    """The `prefetch_factor` to use for the Data Loader"""
+
+@dataclass
+class DocuDINOEvaluationConfig:
+    """
+    Stores config info for DocuDINO's evaluation pipeline
+    """
+    
+    dataset: EvaluationDatasetConfig = field(default_factory=lambda: EvaluationDatasetConfig())
+    """The dataset-specific config info"""
+
+# --- Loading --- #
+def load_training_config(file: str | Path, overrides: list[str]) -> DocuDINOTrainingConfig:
     """
     Parses the YAML config file localed at `file`, and overwrites from command-line arguments
     
@@ -126,7 +169,7 @@ def load_config_file(file: str | Path, overrides: list[str]) -> DocuDINOConfig:
     """
     
     # get structure info
-    schema = OmegaConf.structured(DocuDINOConfig)
+    schema = OmegaConf.structured(DocuDINOTrainingConfig)
     
     # load config file from path
     config = OmegaConf.load(file)

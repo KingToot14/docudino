@@ -7,11 +7,13 @@ from bisect import bisect_right
 from PIL import Image
 
 import torch
-from torch.utils.data import Dataset, Sampler
+from torch.utils.data import Dataset, Sampler, DataLoader
 from torchvision.io import decode_image
 import torchvision.transforms.v2 as T
 
 from .util import pad_image, split_image
+from .augmentations import TrainingAugmentations
+from docudino.training.config import DocuDINOTrainingConfig, DocuDINOEvaluationConfig
 
 # --- Constants --- #
 EXTENSIONS = [".png", ".jpg", ".jpeg"]
@@ -41,17 +43,22 @@ class DocumentDataset(Dataset):
     moving on to the next document.
     """
     
-    def __init__(self, root_dir: str | Path, window_size: int, stride: int, transform=standard_transform(224)):
+    def __init__(self, root_dir: str | Path, window_size: int, stride: int,
+                 return_idx: bool = False, transform=standard_transform(224)):
         """
         Args:
             root_dir (str | Path): The root directory to recursively load files from
             window_size (int): How large each window sample should be (square crop)
             stride (int): How much the pointer should move between samples
+            return_idx (bool): If `true`, the dataset will return the document and
+                writer indices alongside the window. This only works if the dataset
+                names are in the form 'writer-document_id'
             transform: The transform to apply to each collected sample
         """
         
         self.window_size = window_size
         self.stride = stride
+        self.return_idx = return_idx
         
         # store root dir
         if isinstance(root_dir, str):
@@ -63,7 +70,8 @@ class DocumentDataset(Dataset):
         # collect image locations
         self.cached_image: torch.Tensor = None
         self.cached_image_idx: int = 0
-        self.images: list[tuple[int, Path, int, int]] = []
+        self.images: list[tuple[Path, int, int]] = []
+        self.image_info: list[tuple[int, int]] = []
         
         patch_idx: int = 0
         
@@ -87,6 +95,10 @@ class DocumentDataset(Dataset):
             
             self.images.append((path, patch_count, patch_idx))
             self.image_count += 1
+            
+            if self.return_idx:
+                writer, doc_id = path.name.split('-')
+                self.image_info.append((writer, doc_id))
             
             patch_idx += patch_w * patch_h
         
@@ -121,6 +133,9 @@ class DocumentDataset(Dataset):
         
         if self.transform is not None:
             result = self.transform(result)
+        
+        if self.return_idx:
+            return result, *self.image_info[image_idx]
         
         return result
 
@@ -276,3 +291,96 @@ class DistributedDocumentSampler(Sampler):
         self. assigned_documents = indices[torch.isin(
             indices, torch.tensor(rank_documents[self.rank]), assume_unique=True
         )]
+
+def window_collate(data: list[tuple]) -> torch.Tensor:
+    """
+    Collates a batch of data by grouping the window data, writer ids, and document ids into their own gropus
+    
+    Args:
+        data (list[tuple]): The list of data in the form: (window, writer_id, document_id)
+    """
+    
+    # split each document
+    windows: list[torch.Tensor] = [None for _ in range(len(data))]
+    writers: list[int] = []
+    documents: list[int] = []
+    
+    for i in range(len(data)):
+        window, writer, doc_id = data[i]
+        
+        windows[i] = window
+        writers[i] = writer
+        documents[i] = doc_id
+    
+    # create groups
+    return torch.cat(windows), torch.tensor(writers, dtype=torch.int32), torch.tensor(documents, dtype=torch.int32)
+
+# --- Builders --- #
+def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, world_size: int) -> DataLoader:
+    """
+    Builds the standard `TrainingAugmentations`, `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
+    used in standard training, and connects them all together.
+    
+    Args:
+        cfg (DocuDINOTrainingConfig): The config information for training
+        local_rank (int): The local rank of this process
+        world_size (int): The world size of the distributed training
+    """
+    
+    transform = TrainingAugmentations(
+        cfg.dataset.global_view_scale,
+        cfg.dataset.local_view_scale,
+        cfg.dataset.local_views,
+    )
+
+    dataset = DocumentDataset(
+        cfg.dataset.root,
+        cfg.dataset.window_size, cfg.dataset.window_stride,
+        transform=transform
+    )
+
+    print(len(dataset))
+
+    dataloader = DataLoader(
+        dataset,
+        sampler=DistributedDocumentSampler(
+            dataset, cfg.dataset.batch_size,
+            rank=local_rank, num_replicas=world_size
+        ),
+        batch_size=cfg.dataset.batch_size,
+        num_workers=cfg.dataset.num_workers,
+        prefetch_factor=cfg.dataset.prefetch_factor,
+        pin_memory=True,
+    )
+    
+    return dataloader
+
+def create_testing_dataloader(cfg: DocuDINOEvaluationConfig, local_rank: int, world_size: int) -> DataLoader:
+    """
+        Builds the standard `TrainingAugmentations`, `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
+        used in standard training, and connects them all together.
+        
+        Args:
+            cfg (DocuDINOTrainingConfig): The config information for training
+            local_rank (int): The local rank of this process
+            world_size (int): The world size of the distributed training
+        """
+        
+        # dataset = DocumentDataset(
+        #     "datasets/historical_wi/train",
+        #     cfg.dataset.window_size, cfg.dataset.window_stride,
+        # )
+    
+        # dataloader = DataLoader(
+        #     dataset,
+        #     sampler=DistributedDocumentSampler(
+        #         dataset, cfg.dataset.batch_size,
+        #         rank=local_rank, num_replicas=world_size
+        #     ),
+        #     batch_size=cfg.dataset.batch_size,
+        #     num_workers=cfg.dataset.num_workers,
+        #     prefetch_factor=cfg.dataset.prefetch_factor,
+        #     pin_memory=True,
+        # )
+        
+        # return dataloader

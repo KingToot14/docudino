@@ -13,10 +13,10 @@ from tqdm import tqdm
 import wandb
 
 from .util import get_params_groups, cosine_scheduler
-from .config import load_config_file
+from .config import load_training_config
 from .dino_loss import DINOLoss
 from docudino.model import dino_v1
-from docudino.data import DocumentDataset, DistributedDocumentSampler, TrainingAugmentations
+from docudino.data import create_training_dataloader
 
 def setup_ddp() -> None:
     local_rank = int(os.environ['LOCAL_RANK'])
@@ -33,7 +33,7 @@ def setup_ddp() -> None:
 class TrainingSystem:
     def __init__(self, config_file: str, overrides: list[str]):
         # parse config file
-        self.cfg = load_config_file(config_file, overrides)
+        self.cfg = load_training_config(config_file, overrides)
 
         # setup DDP
         self.LOCAL_RANK = setup_ddp()
@@ -43,28 +43,7 @@ class TrainingSystem:
         torch.backends.cudnn.benchmark = True
 
         # create dataset
-        transform = TrainingAugmentations(
-            self.cfg.dataset.global_view_scale,
-            self.cfg.dataset.local_view_scale,
-            self.cfg.dataset.local_views,
-        )
-        
-        self.dataset = DocumentDataset(
-            "datasets/historical_wi/train",
-            self.cfg.dataset.window_size, self.cfg.dataset.window_stride,
-            transform=transform)
-        
-        self.dataloader = DataLoader(
-            self.dataset,
-            sampler=DistributedDocumentSampler(
-                self.dataset, self.cfg.dataset.batch_size,
-                rank=self.LOCAL_RANK, num_replicas=self.WORLD_SIZE
-            ),
-            batch_size=self.cfg.dataset.batch_size,
-            num_workers=self.cfg.dataset.num_workers,
-            prefetch_factor=self.cfg.dataset.prefetch_factor,
-            pin_memory=True,
-        )
+        self.dataloader = create_training_dataloader(self.cfg, self.LOCAL_RANK, self.WORLD_SIZE)
         
         self.EPOCHS = self.cfg.training.epochs
         
@@ -127,10 +106,15 @@ class TrainingSystem:
     def train(self):
         print(f"Starting DINO training (Process {self.LOCAL_RANK})")
         
-        with wandb.init(project="DocuDINO") as run:
+        if self.cfg.logging.wandb:
+            with wandb.init(project="DocuDINO") as run:
+                for epoch in range(self.EPOCHS):
+                    self.dataloader.sampler.set_epoch(epoch)
+                    self.train_epoch(epoch, run)
+        else:
             for epoch in range(self.EPOCHS):
                 self.dataloader.sampler.set_epoch(epoch)
-                self.train_epoch(epoch, run)
+                self.train_epoch(epoch)
         
         print(f"Done training (Process {self.LOCAL_RANK})")
         

@@ -103,8 +103,8 @@ class VisionTransformer(nn.Module):
     """
     
     def __init__(self, d_model: int, patch_size: int, n_heads: int,
-            n_layers: int, d_head: int, n_channels: int = 3, img_size: int = 224,
-            qkv_bias: bool = True, training: bool = False):
+            n_layers: int, d_head: int = 8192, n_channels: int = 3, img_size: int = 224,
+            qkv_bias: bool = True):
         """
         Creates a new `nn.Module` that connects a few different components in order to implement a full
         Vision Transformer.
@@ -118,9 +118,6 @@ class VisionTransformer(nn.Module):
             n_channels (int): The number of image channels. 1 for greyscale, 3 for RGB, etc.
             img_size (int): The standard image size accepted by this model
             qkv_bias (bool): If `true`, the `qkv` projection will have a bias term
-            training (bool): If `true`, this model will be considered in "training" mode. This primarily
-                adjusts what the `forward` function returns. During training, this is the DINO projection
-                head. Otherwise, this is just the list of tokens
         """
         
         super().__init__()
@@ -136,11 +133,9 @@ class VisionTransformer(nn.Module):
         self.d_head = d_head
         self.n_channels = n_channels
         self.img_size = img_size
-        self.training = training
         
         # create a blank classification token
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        self.tokens: torch.Tensor | list[torch.Tensor] = None
         
         # create encoders
         self.patch_embedding = PatchEmbeddings(d_model, patch_size, n_channels)
@@ -198,9 +193,7 @@ class VisionTransformer(nn.Module):
             if self.training:
                 return self.proj_head(tokens[:, 0])
             else:
-                self.tokens = tokens
-                
-                return self.tokens
+                return tokens
         
         outputs = []
         tokens = []
@@ -221,33 +214,4 @@ class VisionTransformer(nn.Module):
         if self.training:
             return self.proj_head(output)
         else:
-            self.tokens = tokens
-            
-            return self.tokens
-
-    def get_class_token(self) -> torch.Tensor | list[torch.Tensor]:
-        """
-        Returns the most recent batch of class tokens (if `forward` was called with
-        multiple image resolutions, this will be a list of batches)
-        """
-        
-        if self.tokens is not None:
-            if isinstance(self.tokens, list):
-                return [token[:, 0] for token in self.tokens]
-            else:
-                return self.tokens[:, 0]
-
-        return None
-
-    def get_patch_tokens(self) -> torch.Tensor | list[torch.Tensor]:
-        """
-        Returns the most recent patch_tokens
-        """
-        
-        if self.tokens is not None:
-            if isinstance(self.tokens, list):
-                return [token[:, 1:] for token in self.tokens]
-            else:
-                return self.tokens[:, 1:]
-
-        return None
+            return tokens

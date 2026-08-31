@@ -1,14 +1,16 @@
 dataset:
-  root: datasets/historical_wi/train
-  window_size: 224
-  window_stride: 224
+  root: 'datasets/historical_wi'
   batch_size: 128
-  num_workers: 4
-  prefetch_factor: 3
+  num_workers: 0
+  prefetch_factor: 2
 extract:
+  weights: ''
+  window_size: 224
   train_stride: 224
   test_stride: 56
-training:
+  compile_mode: 'max-autotune-no-cudagraphs'
+  compile_backend: 'inductor'
+codebook:
   samples_per_document: 512
   codebook_iterations: 250
   codebook_clusters: 100

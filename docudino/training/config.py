@@ -1,5 +1,5 @@
 from pathlib import Path
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import OmegaConf
 
 from typing import List
 from dataclasses import dataclass, field
@@ -124,36 +124,6 @@ class DocuDINOTrainingConfig:
     
     logging: LoggingConfig = field(default_factory=lambda: LoggingConfig())
     """The logging config info"""
-
-# --- Evaluation Config --- #
-@dataclass
-class EvaluationDatasetConfig:
-    """
-    Stores config info for the evaluation dataset
-    """
-    
-    root: str = ""
-    """The root filepath of the evaluation dataset"""
-    window_size: int = 224
-    """The size of the windows to slice from each image in the dataset"""
-    window_stride: int = 224
-    """The distance to move when slicing multiple windows from an image. A value equal
-    to `window_size` means it slices a perfectly non-overlapping collection of windows"""
-    batch_size: int = 128
-    """How many windows should be included in a single batch. Increases throughput and memory usage"""
-    num_workers: int = 4
-    """How many CPU workers to create when loading the dataset"""
-    prefetch_factor: int = 3
-    """The `prefetch_factor` to use for the Data Loader"""
-
-@dataclass
-class DocuDINOEvaluationConfig:
-    """
-    Stores config info for DocuDINO's evaluation pipeline
-    """
-    
-    dataset: EvaluationDatasetConfig = field(default_factory=lambda: EvaluationDatasetConfig())
-    """The dataset-specific config info"""
 
 # --- Loading --- #
 def load_training_config(file: str | Path, overrides: list[str]) -> DocuDINOTrainingConfig:

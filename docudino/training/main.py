@@ -38,6 +38,7 @@ class TrainingSystem:
         # setup DDP
         self.LOCAL_RANK = setup_ddp()
         self.WORLD_SIZE = dist.get_world_size()
+        self.DEVICE = torch.device(f"cuda:{self.LOCAL_RANK}")
 
         # set torch flags
         torch.backends.cudnn.benchmark = True
@@ -48,15 +49,15 @@ class TrainingSystem:
         self.EPOCHS = self.cfg.training.epochs
         
         # load model
-        self.DEVICE = torch.device(f"cuda:{self.LOCAL_RANK}")
         self.student = dino_v1.vit_small(
             d_head=self.cfg.model.dino_head_dimensions,
-            training=True,
         ).to(self.DEVICE)
+        self.student.train()
+
         self.teacher = dino_v1.vit_small(
             d_head=self.cfg.model.dino_head_dimensions,
-            training=True,
         ).to(self.DEVICE)
+        self.teacher.train()
         
         self.teacher.load_state_dict(self.student.state_dict())
         

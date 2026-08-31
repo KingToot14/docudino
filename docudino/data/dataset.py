@@ -13,26 +13,29 @@ import torchvision.transforms.v2 as T
 
 from .util import pad_image, split_image
 from .augmentations import TrainingAugmentations
-from docudino.training.config import DocuDINOTrainingConfig, DocuDINOEvaluationConfig
+from docudino.training.config import DocuDINOTrainingConfig
+from docudino.evaluation.config import DocuDINOEvaluationConfig
 
 # --- Constants --- #
 EXTENSIONS = [".png", ".jpg", ".jpeg"]
 
 # --- Functions --- #
+TO_FLOAT = T.ToDtype(torch.float32, scale=True)
+NORMALIZE = T.Normalize(
+    mean=(0.485, 0.456, 0.406),
+    std=(0.229, 0.224, 0.225),
+)
+
 def standard_transform(resize_size: int = 224):
     """
-    Defines a standard DINO-style transformation that converts an image to a tensor,
-    resizes it, and normalizes it
+    Defines a standard DINO-style transformation that converts an image to a tensor and
+    resizes it
     """
     
     return T.Compose([
         T.ToImage(),
         T.Resize((resize_size, resize_size), antialias=True),
         T.ToDtype(torch.float32, scale=True),
-        T.Normalize(
-            mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225),
-        ),
     ])
 
 # --- Classes --- #
@@ -97,8 +100,8 @@ class DocumentDataset(Dataset):
             self.image_count += 1
             
             if self.return_idx:
-                writer, doc_id = path.name.split('-')
-                self.image_info.append((writer, doc_id))
+                writer, doc_id = path.stem.split('-')
+                self.image_info.append((int(writer), int(doc_id)))
             
             patch_idx += patch_w * patch_h
         
@@ -107,6 +110,18 @@ class DocumentDataset(Dataset):
         self.patch_starts = [
             patch_start for _, _, patch_start in self.images
         ]
+
+    def _load_image(self, path: str, image_idx: int) -> None:
+        img = decode_image(path)
+                    
+        # pad the image, then pre-split it into windows (bulk processing should be cheaper)
+        self.cached_image = split_image(
+            pad_image(img, self.window_size, self.stride),
+            self.window_size,
+            self.stride
+        )
+        
+        self.cached_image_idx = image_idx
     
     def __len__(self):
         return self.patch_count
@@ -116,16 +131,7 @@ class DocumentDataset(Dataset):
         path, _, patch_start = self.images[image_idx]
         
         if self.cached_image is None or self.cached_image_idx != image_idx:
-            img = decode_image(path)
-            
-            # pad the image, then pre-split it into windows (bulk processing should be cheaper)
-            self.cached_image = split_image(
-                pad_image(img, self.window_size, self.stride),
-                self.window_size,
-                self.stride
-            )
-            
-            self.cached_image_idx = image_idx
+            self._load_image(path, image_idx)
         
         patch_idx = index - patch_start
         
@@ -138,6 +144,40 @@ class DocumentDataset(Dataset):
             return result, *self.image_info[image_idx]
         
         return result
+    
+    def __getitems__(self, indices: list[int]) -> list[torch.Tensor]:
+        results = []
+        image_idx = 0
+        
+        # print(indices)
+        
+        for index in indices:
+            path, patch_count, patch_start = self.images[image_idx]
+            
+            # check if a new document started (indices should already be grouped)
+            if index >= patch_start + patch_count or index < patch_start:
+                image_idx = bisect_right(self.patch_starts, index) - 1
+                
+                path, patch_count, patch_start = self.images[image_idx]
+                
+                # load new image
+                if self.cached_image is None or self.cached_image_idx != image_idx:
+                    self._load_image(path, image_idx)
+            
+            patch_idx = index - patch_start
+            
+            result = self.cached_image[patch_idx]
+            
+            if self.transform is not None:
+                result = self.transform(result)
+            
+            # check for index information
+            if self.return_idx:
+                result = [result, *self.image_info[image_idx]]
+            
+            results.append(result)
+        
+        return results
 
 class DocumentSampler(Sampler):
     """
@@ -188,7 +228,7 @@ class DistributedDocumentSampler(Sampler):
     """
     
     def __init__(self, data: DocumentDataset, batch_size: int, shuffle: bool = True,
-                 rank: int = 0, num_replicas: int = 1, seed: int = random.randint(0, 2**16 - 1)):
+                 rank: int = 0, num_replicas: int = 1, seed: int | None = None):
         """
         Args:
             data (DocumentDataset): The dataset to sample from
@@ -202,13 +242,19 @@ class DistributedDocumentSampler(Sampler):
         self.rank = rank
         self.num_replicas = num_replicas
         
-        self.seed = seed
+        # update seed
+        if seed is None:
+            self.seed = random.randint(0, 2**16 - 1)
+        else:
+            self.seed = seed
         
         self.epoch = 0
         self.assigned_documents = None
         self.target_patches = 0
         
         self.set_epoch(0)
+        
+        self._distribute_indices()
     
     def set_epoch(self, epoch: int) -> None:
         """
@@ -216,30 +262,30 @@ class DistributedDocumentSampler(Sampler):
         """
         
         self.epoch = epoch
-        
-        # create deterministic generator
-        self.generator = torch.Generator()
-        self.generator.manual_seed(self.seed + self.epoch)
-        
-        # shuffle documents
-        indices: torch.Tensor
-        
-        if self.shuffle:
-            indices = torch.randperm(self.data.image_count, generator=self.generator)
-        else:
-            indices = torch.arange(0, self.data.image_count)
-        
-        # only keep this GPU's indicies
-        self._distribute_indices(indices)
     
     def __len__(self):
         return self.target_patches
     
     def __iter__(self):
-        yielded_docs = 0
+        yielded_windows = 0
+        
+        # create deterministic generator
+        self.generator = torch.Generator()
+        self.generator.manual_seed(self.seed + self.epoch)
+        
+        # get assigned indices
+        assigned = self.document_buckets[self.rank + self.epoch % self.num_replicas]
+        
+        document_indices: torch.Tensor
+        
+        if self.shuffle:
+            document_indices = torch.randperm(len(assigned), generator=self.generator)
+        else:
+            document_indices = torch.arange(0, len(assigned))
         
         # iterate through each document
-        for index in self.assigned_documents:
+        for doc_index in document_indices:
+            index = assigned[doc_index]
             _, patch_count, patch_start = self.data.images[index]
             
             # shuffle windows
@@ -252,45 +298,43 @@ class DistributedDocumentSampler(Sampler):
             
             # yield each window
             for patch_idx in patch_indices:
-                if yielded_docs >= self.target_patches:
+                if yielded_windows >= self.target_patches:
                     return
                 
                 yield patch_idx + patch_start
                 
-                yielded_docs += 1
+                yielded_windows += 1
     
-    def _distribute_indices(self, indices: torch.Tensor) -> torch.Tensor:
+    def _distribute_indices(self) -> torch.Tensor:
         """
-        Evenly distributes the shuffled document `indices` by their patch size using a greedy
+        Evenly distributes the shuffled document indices by their patch size using a greedy
         "Longest Processing Time" algorithm. This also guarantees that each dataloader will
         have the exact same number of batches, which is very important for DDP.
-        
-        Args:
-            indices (torch.Tensor): The shuffled document indices
         """
         
-        rank_documents = [[] for _ in range(self.num_replicas)]
-        rank_patches = [0] * self.num_replicas
+        self.document_buckets = [[] for _ in range(self.num_replicas)]
+        bucket_patches = [0] * self.num_replicas
         
         # greedily assign all documents to ranks
+        indices = torch.arange(0, len(self.data.images))
+        
         for index in sorted(indices, key=lambda i: self.data.images[i][1], reverse=True):
             _, patch_count, _ = self.data.images[index]
             
-            # gets the minimum rank by their value in 'rank_patches'
-            rank = min(range(self.num_replicas), key=rank_patches.__getitem__)
+            # gets the minimum rank by their value in 'bucket_patches'
+            rank = min(range(self.num_replicas), key=bucket_patches.__getitem__)
             
-            rank_documents[rank].append(index)
-            rank_patches[rank] += patch_count
+            self.document_buckets[rank].append(index)
+            bucket_patches[rank] += patch_count
         
-        # make sure each rank has the same number of documents
-        rank_patches = [patch / self.batch_size for patch in rank_patches]
+        # convert to tensor
+        self.document_buckets = [torch.tensor(bucket, dtype=torch.int32) for bucket in self.document_buckets]
         
-        min_batch = int(min(rank_patches))
+        # make sure each rank has the same number of batches
+        bucket_patches = [patch / self.batch_size for patch in bucket_patches]
+        
+        min_batch = int(min(bucket_patches))
         self.target_patches = min_batch * self.batch_size
-        
-        self. assigned_documents = indices[torch.isin(
-            indices, torch.tensor(rank_documents[self.rank]), assume_unique=True
-        )]
 
 def window_collate(data: list[tuple]) -> torch.Tensor:
     """
@@ -301,19 +345,13 @@ def window_collate(data: list[tuple]) -> torch.Tensor:
     """
     
     # split each document
-    windows: list[torch.Tensor] = [None for _ in range(len(data))]
-    writers: list[int] = []
-    documents: list[int] = []
+    windows, writers, documents = zip(*data)
     
-    for i in range(len(data)):
-        window, writer, doc_id = data[i]
-        
-        windows[i] = window
-        writers[i] = writer
-        documents[i] = doc_id
-    
-    # create groups
-    return torch.cat(windows), torch.tensor(writers, dtype=torch.int32), torch.tensor(documents, dtype=torch.int32)
+    return (
+        torch.stack(windows),
+        torch.tensor(writers, dtype=torch.int32),
+        torch.tensor(documents, dtype=torch.int32),
+    )
 
 # --- Builders --- #
 def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, world_size: int) -> DataLoader:
@@ -339,8 +377,6 @@ def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, wor
         transform=transform
     )
 
-    print(len(dataset))
-
     dataloader = DataLoader(
         dataset,
         sampler=DistributedDocumentSampler(
@@ -349,38 +385,42 @@ def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, wor
         ),
         batch_size=cfg.dataset.batch_size,
         num_workers=cfg.dataset.num_workers,
-        prefetch_factor=cfg.dataset.prefetch_factor,
+        prefetch_factor=cfg.dataset.prefetch_factor if cfg.dataset.num_workers > 0 else None,
         pin_memory=True,
     )
     
     return dataloader
 
-def create_testing_dataloader(cfg: DocuDINOEvaluationConfig, local_rank: int, world_size: int) -> DataLoader:
+def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: bool,
+                                 local_rank: int, world_size: int) -> DataLoader:
     """
-        Builds the standard `TrainingAugmentations`, `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
-        used in standard training, and connects them all together.
-        
-        Args:
-            cfg (DocuDINOTrainingConfig): The config information for training
-            local_rank (int): The local rank of this process
-            world_size (int): The world size of the distributed training
-        """
-        
-        # dataset = DocumentDataset(
-        #     "datasets/historical_wi/train",
-        #     cfg.dataset.window_size, cfg.dataset.window_stride,
-        # )
+    Builds the standard `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
+    used in standard training, and connects them all together.
     
-        # dataloader = DataLoader(
-        #     dataset,
-        #     sampler=DistributedDocumentSampler(
-        #         dataset, cfg.dataset.batch_size,
-        #         rank=local_rank, num_replicas=world_size
-        #     ),
-        #     batch_size=cfg.dataset.batch_size,
-        #     num_workers=cfg.dataset.num_workers,
-        #     prefetch_factor=cfg.dataset.prefetch_factor,
-        #     pin_memory=True,
-        # )
-        
-        # return dataloader
+    Args:
+        cfg (DocuDINOTrainingConfig): The config information for training
+        local_rank (int): The local rank of this process
+        is_training (bool): If `True`, loads the dataset using the training parameters
+        world_size (int): The world size of the distributed training
+    """
+    
+    dataset = DocumentDataset(
+        f"datasets/historical_wi/{("train" if is_training else "test")}",
+        cfg.extract.window_size, cfg.extract.train_stride if is_training else cfg.extract.test_stride,
+        return_idx=True
+    )
+    
+    dataloader = DataLoader(
+        dataset,
+        sampler=DistributedDocumentSampler(
+            dataset, cfg.dataset.batch_size,
+            rank=local_rank, num_replicas=world_size
+        ),
+        collate_fn=window_collate,
+        batch_size=cfg.dataset.batch_size,
+        num_workers=cfg.dataset.num_workers,
+        prefetch_factor=cfg.dataset.prefetch_factor if cfg.dataset.num_workers > 0 else None,
+        pin_memory=True,
+    )
+    
+    return dataloader

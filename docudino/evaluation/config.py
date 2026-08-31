@@ -20,6 +20,8 @@ class EvaluationDatasetConfig:
     """How many CPU workers to create when loading the dataset"""
     prefetch_factor: int = 3
     """The `prefetch_factor` to use for the Data Loader"""
+    shuffle: bool = True
+    """If `True`, the dataset will be shuffled on a per-document and per-patch level"""
 
 @dataclass
 class ExtractConfig:

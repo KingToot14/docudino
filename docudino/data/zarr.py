@@ -41,9 +41,7 @@ def standard_transform(resize_size: int = 224):
 # --- Classes --- #
 class DocumentDataset(Dataset):
     """
-    A `Dataset` that loads and caches document files, splits them into windows, and returns 1
-    window at a time. This is optimized for reading all windows of a document at once before
-    moving on to the next document.
+    A `Dataset` that utilizes `zarr` in order to read from a dataset of pre-split image chunks
     """
     
     def __init__(self, root_dir: str | Path, window_size: int, stride: int,
@@ -77,7 +75,6 @@ class DocumentDataset(Dataset):
         self.image_info: list[tuple[int, int]] = []
         
         patch_idx: int = 0
-        document_id: int = 0
         
         self.image_count: int = 0
         self.patch_count: int = 0
@@ -101,9 +98,8 @@ class DocumentDataset(Dataset):
             self.image_count += 1
             
             if self.return_idx:
-                writer, _ = path.stem.split('-', 1)
-                self.image_info.append((int(writer), int(document_id)))
-                document_id += 1
+                writer, doc_id = path.stem.split('-')
+                self.image_info.append((int(writer), int(doc_id)))
             
             patch_idx += patch_w * patch_h
         
@@ -151,6 +147,8 @@ class DocumentDataset(Dataset):
         results = []
         image_idx = 0
         
+        # print(indices)
+        
         for index in indices:
             path, patch_count, patch_start = self.images[image_idx]
             
@@ -159,10 +157,10 @@ class DocumentDataset(Dataset):
                 image_idx = bisect_right(self.patch_starts, index) - 1
                 
                 path, patch_count, patch_start = self.images[image_idx]
-            
-            # load new image
-            if self.cached_image is None or self.cached_image_idx != image_idx:
-                self._load_image(path, image_idx)
+                
+                # load new image
+                if self.cached_image is None or self.cached_image_idx != image_idx:
+                    self._load_image(path, image_idx)
             
             patch_idx = index - patch_start
             
@@ -312,12 +310,6 @@ class DistributedDocumentSampler(Sampler):
         have the exact same number of batches, which is very important for DDP.
         """
         
-        # if no world size, just set to all documents
-        if self.num_replicas == 1:
-            self.document_buckets = [torch.arange(len(self.data.images), dtype=torch.int32)]
-            self.target_patches = len(self.data)
-            return
-        
         self.document_buckets = [[] for _ in range(self.num_replicas)]
         bucket_patches = [0] * self.num_replicas
         
@@ -404,7 +396,7 @@ def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: boo
     used in standard training, and connects them all together.
     
     Args:
-        cfg (DocuDINOEvaluationConfig): The config information for training
+        cfg (DocuDINOTrainingConfig): The config information for training
         local_rank (int): The local rank of this process
         is_training (bool): If `True`, loads the dataset using the training parameters
         world_size (int): The world size of the distributed training
@@ -420,7 +412,6 @@ def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: boo
         dataset,
         sampler=DistributedDocumentSampler(
             dataset, cfg.dataset.batch_size,
-            shuffle=cfg.dataset.shuffle,
             rank=local_rank, num_replicas=world_size
         ),
         collate_fn=window_collate,

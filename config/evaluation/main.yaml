@@ -3,6 +3,7 @@ dataset:
   batch_size: 128
   num_workers: 0
   prefetch_factor: 2
+  shuffle: False
 extract:
   weights: ''
   window_size: 224

@@ -1,5 +1,6 @@
 dataset:
-  root: 'datasets/historical_wi'
+  root: 'datasets/historical_wi_cache'
+  dataset: 'zarr'
   batch_size: 128
   num_workers: 0
   prefetch_factor: 2

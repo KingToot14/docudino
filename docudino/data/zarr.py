@@ -4,10 +4,11 @@ from pathlib import Path
 
 from bisect import bisect_right
 
-from PIL import Image
+import zarr
 
+import numpy as np
 import torch
-from torch.utils.data import Dataset, Sampler, DataLoader
+from torch.utils.data import Dataset, Sampler, DataLoader, DistributedSampler
 from torchvision.io import decode_image
 import torchvision.transforms.v2 as T
 
@@ -39,75 +40,82 @@ def standard_transform(resize_size: int = 224):
     ])
 
 # --- Classes --- #
-class DocumentDataset(Dataset):
+class ZarrDocumentDataset(Dataset):
     """
     A `Dataset` that utilizes `zarr` in order to read from a dataset of pre-split image chunks
     """
     
-    def __init__(self, root_dir: str | Path, window_size: int, stride: int,
+    def __init__(self, root_dir: str | Path,
                  return_idx: bool = False, transform=standard_transform(224)):
         """
         Args:
             root_dir (str | Path): The root directory to recursively load files from
-            window_size (int): How large each window sample should be (square crop)
-            stride (int): How much the pointer should move between samples
             return_idx (bool): If `true`, the dataset will return the document and
                 writer indices alongside the window. This only works if the dataset
                 names are in the form 'writer-document_id'
             transform: The transform to apply to each collected sample
         """
         
-        self.window_size = window_size
-        self.stride = stride
         self.return_idx = return_idx
-        
-        # store root dir
-        if isinstance(root_dir, str):
-            root_dir = Path(root_dir)
-        self.root_dir = root_dir
-        
         self.transform = transform
         
-        # collect image locations
-        self.cached_image: torch.Tensor = None
-        self.cached_image_idx: int = 0
-        self.images: list[tuple[Path, int, int]] = []
-        self.image_info: list[tuple[int, int]] = []
+        # load zarr
+        self.root = zarr.open(root_dir)
         
-        patch_idx: int = 0
+        self.images = self.root['images']
+        self.doc_ids = self.root['doc_ids']
+        self.doc_map = self.root['doc_map']
         
-        self.image_count: int = 0
-        self.patch_count: int = 0
+        # store image info
+        self.image_count = self.doc_map.shape[0]
         
-        for path in sorted(Path(root_dir).rglob("*")):
-            # make sure file extension is supported
-            if path.suffix.lower() not in EXTENSIONS:
-                continue
-            
-            # collect image size (should just lazily load metadata, not actual image)
-            w, h = 0, 0
-            with Image.open(path) as img:
-                w, h = img.size
-            
-            # get patches
-            patch_w = max(1, math.ceil((w - window_size) / stride) + 1)
-            patch_h = max(1, math.ceil((h - window_size) / stride) + 1)
-            patch_count = patch_w * patch_h
-            
-            self.images.append((path, patch_count, patch_idx))
-            self.image_count += 1
-            
-            if self.return_idx:
-                writer, doc_id = path.stem.split('-')
-                self.image_info.append((int(writer), int(doc_id)))
-            
-            patch_idx += patch_w * patch_h
+        # store root dir
+        # if isinstance(root_dir, str):
+        #     root_dir = Path(root_dir)
+        # self.root_dir = root_dir
         
-        self.patch_count = patch_idx
+        # self.transform = transform
         
-        self.patch_starts = [
-            patch_start for _, _, patch_start in self.images
-        ]
+        # # collect image locations
+        # self.cached_image: torch.Tensor = None
+        # self.cached_image_idx: int = 0
+        # self.images: list[tuple[Path, int, int]] = []
+        # self.image_info: list[tuple[int, int]] = []
+        
+        # patch_idx: int = 0
+        
+        # self.image_count: int = 0
+        # self.patch_count: int = 0
+        
+        # for path in sorted(Path(root_dir).rglob("*")):
+        #     # make sure file extension is supported
+        #     if path.suffix.lower() not in EXTENSIONS:
+        #         continue
+            
+        #     # collect image size (should just lazily load metadata, not actual image)
+        #     w, h = 0, 0
+        #     with Image.open(path) as img:
+        #         w, h = img.size
+            
+        #     # get patches
+        #     patch_w = max(1, math.ceil((w - window_size) / stride) + 1)
+        #     patch_h = max(1, math.ceil((h - window_size) / stride) + 1)
+        #     patch_count = patch_w * patch_h
+            
+        #     self.images.append((path, patch_count, patch_idx))
+        #     self.image_count += 1
+            
+        #     if self.return_idx:
+        #         writer, doc_id = path.stem.split('-')
+        #         self.image_info.append((int(writer), int(doc_id)))
+            
+        #     patch_idx += patch_w * patch_h
+        
+        # self.patch_count = patch_idx
+        
+        # self.patch_starts = [
+        #     patch_start for _, _, patch_start in self.images
+        # ]
 
     def _load_image(self, path: str, image_idx: int) -> None:
         img = decode_image(path)
@@ -122,60 +130,65 @@ class DocumentDataset(Dataset):
         self.cached_image_idx = image_idx
     
     def __len__(self):
-        return self.patch_count
+        return self.images.shape[0]
 
     def __getitem__(self, index: int) -> torch.Tensor:
-        image_idx = bisect_right(self.patch_starts, index) - 1
-        path, _, patch_start = self.images[image_idx]
+        # image_idx = bisect_right(self.patch_starts, index) - 1
+        # path, _, patch_start = self.images[image_idx]
         
-        if self.cached_image is None or self.cached_image_idx != image_idx:
-            self._load_image(path, image_idx)
+        # if self.cached_image is None or self.cached_image_idx != image_idx:
+        #     self._load_image(path, image_idx)
         
-        patch_idx = index - patch_start
+        # patch_idx = index - patch_start
         
-        result = self.cached_image[patch_idx]
+        # result = self.cached_image[patch_idx]
         
+        # load image
+        result = torch.from_numpy(self.images[index])
+        
+        # transform image
         if self.transform is not None:
             result = self.transform(result)
         
         if self.return_idx:
-            return result, *self.image_info[image_idx]
+            doc_id = int(self.doc_ids[index])
+            return result, int(self.doc_map[doc_id]), doc_id
         
         return result
     
-    def __getitems__(self, indices: list[int]) -> list[torch.Tensor]:
-        results = []
-        image_idx = 0
+    # def __getitems__(self, indices: list[int]) -> list[torch.Tensor]:
+    #     results = []
+    #     image_idx = 0
         
-        # print(indices)
+    #     # print(indices)
         
-        for index in indices:
-            path, patch_count, patch_start = self.images[image_idx]
+    #     for index in indices:
+    #         path, patch_count, patch_start = self.images[image_idx]
             
-            # check if a new document started (indices should already be grouped)
-            if index >= patch_start + patch_count or index < patch_start:
-                image_idx = bisect_right(self.patch_starts, index) - 1
+    #         # check if a new document started (indices should already be grouped)
+    #         if index >= patch_start + patch_count or index < patch_start:
+    #             image_idx = bisect_right(self.patch_starts, index) - 1
                 
-                path, patch_count, patch_start = self.images[image_idx]
+    #             path, patch_count, patch_start = self.images[image_idx]
                 
-                # load new image
-                if self.cached_image is None or self.cached_image_idx != image_idx:
-                    self._load_image(path, image_idx)
+    #             # load new image
+    #             if self.cached_image is None or self.cached_image_idx != image_idx:
+    #                 self._load_image(path, image_idx)
             
-            patch_idx = index - patch_start
+    #         patch_idx = index - patch_start
             
-            result = self.cached_image[patch_idx]
+    #         result = self.cached_image[patch_idx]
             
-            if self.transform is not None:
-                result = self.transform(result)
+    #         if self.transform is not None:
+    #             result = self.transform(result)
             
-            # check for index information
-            if self.return_idx:
-                result = [result, *self.image_info[image_idx]]
+    #         # check for index information
+    #         if self.return_idx:
+    #             result = [result, *self.image_info[image_idx]]
             
-            results.append(result)
+    #         results.append(result)
         
-        return results
+    #     return results
 
 class DocumentSampler(Sampler):
     """
@@ -183,10 +196,10 @@ class DocumentSampler(Sampler):
     all windows of a document before moving on to another document
     """
     
-    def __init__(self, data: DocumentDataset, shuffle: bool = True):
+    def __init__(self, data: ZarrDocumentDataset, shuffle: bool = True):
         """
         Args:
-            data (DocumentDataset): The dataset to sample from
+            data (ZarrDocumentDataset): The dataset to sample from
             shuffle (bool): If `true`, the document load order will be randomized between
                 each epoch
         """
@@ -225,11 +238,11 @@ class DistributedDocumentSampler(Sampler):
     handles distrbuted data across multiple GPU processes
     """
     
-    def __init__(self, data: DocumentDataset, batch_size: int, shuffle: bool = True,
+    def __init__(self, data: ZarrDocumentDataset, batch_size: int, shuffle: bool = True,
                  rank: int = 0, num_replicas: int = 1, seed: int | None = None):
         """
         Args:
-            data (DocumentDataset): The dataset to sample from
+            data (ZarrDocumentDataset): The dataset to sample from
             shuffle (bool): If `true`, the document load order will be randomized between
                 each epoch
         """
@@ -354,7 +367,7 @@ def window_collate(data: list[tuple]) -> torch.Tensor:
 # --- Builders --- #
 def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, world_size: int) -> DataLoader:
     """
-    Builds the standard `TrainingAugmentations`, `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
+    Builds the standard `TrainingAugmentations`, `ZarrDocumentDataset`, `DataLoader`, and `DistributedDataSampler`
     used in standard training, and connects them all together.
     
     Args:
@@ -369,7 +382,7 @@ def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, wor
         cfg.dataset.local_views,
     )
 
-    dataset = DocumentDataset(
+    dataset = ZarrDocumentDataset(
         cfg.dataset.root,
         cfg.dataset.window_size, cfg.dataset.window_stride,
         transform=transform
@@ -392,7 +405,7 @@ def create_training_dataloader(cfg: DocuDINOTrainingConfig, local_rank: int, wor
 def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: bool,
                                  local_rank: int, world_size: int) -> DataLoader:
     """
-    Builds the standard `DocumentDataset`, `DataLoader`, and `DistributedDataSampler`
+    Builds the standard `ZarrDocumentDataset`, `DataLoader`, and `DistributedDataSampler`
     used in standard training, and connects them all together.
     
     Args:
@@ -402,16 +415,15 @@ def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: boo
         world_size (int): The world size of the distributed training
     """
     
-    dataset = DocumentDataset(
-        f"datasets/historical_wi/{("train" if is_training else "test")}",
-        cfg.extract.window_size, cfg.extract.train_stride if is_training else cfg.extract.test_stride,
+    dataset = ZarrDocumentDataset(
+        f"{cfg.dataset.root}_{("train" if is_training else "test")}",
         return_idx=True
     )
     
     dataloader = DataLoader(
         dataset,
-        sampler=DistributedDocumentSampler(
-            dataset, cfg.dataset.batch_size,
+        sampler=DistributedSampler(
+            dataset,
             rank=local_rank, num_replicas=world_size
         ),
         collate_fn=window_collate,

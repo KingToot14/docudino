@@ -9,7 +9,8 @@ import torch.distributed as dist
 from tqdm import tqdm
 
 from docudino.evaluation.config import load_evaluation_config
-from docudino.data import create_evaluation_dataloader, TO_FLOAT, NORMALIZE
+from docudino.data import TO_FLOAT, NORMALIZE
+from docudino.data.zarr import create_evaluation_dataloader
 from docudino.data.filter import get_window_filter, get_patch_filter
 from docudino.data.serialization import save_patches, AsyncWriter
 from docudino.model import dino_v1

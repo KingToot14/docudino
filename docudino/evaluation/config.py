@@ -14,6 +14,9 @@ class EvaluationDatasetConfig:
     root: str = ""
     """The root filepath of the evaluation dataset"""
     
+    dataset: str = ""
+    """The type of dataset to use. Possible options are 'standard' and 'zarr'"""
+    
     batch_size: int = 128
     """How many windows should be included in a single batch. Increases throughput and memory usage"""
     num_workers: int = 4

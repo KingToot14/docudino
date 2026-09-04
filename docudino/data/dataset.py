@@ -77,6 +77,8 @@ class DocumentDataset(Dataset):
         self.image_info: list[tuple[int, int]] = []
         
         patch_idx: int = 0
+        writers: dict[int, int] = {}
+        next_writer: int = 0
         document_id: int = 0
         
         self.image_count: int = 0
@@ -101,8 +103,15 @@ class DocumentDataset(Dataset):
             self.image_count += 1
             
             if self.return_idx:
-                writer, _ = path.stem.split('-', 1)
-                self.image_info.append((int(writer), int(document_id)))
+                writer = int(path.stem.split('-', 1)[0])
+                
+                if writer not in writers:
+                    writers[writer] = next_writer
+                    next_writer += 1
+                
+                writer_id = writers[writer]
+                
+                self.image_info.append((writer_id, document_id))
                 document_id += 1
             
             patch_idx += patch_w * patch_h
@@ -274,7 +283,7 @@ class DistributedDocumentSampler(Sampler):
         self.generator.manual_seed(self.seed + self.epoch)
         
         # get assigned indices
-        assigned = self.document_buckets[self.rank + self.epoch % self.num_replicas]
+        assigned = self.document_buckets[(self.rank + self.epoch) % self.num_replicas]
         
         document_indices: torch.Tensor
         
@@ -411,7 +420,7 @@ def create_evaluation_dataloader(cfg: DocuDINOEvaluationConfig, is_training: boo
     """
     
     dataset = DocumentDataset(
-        f"datasets/historical_wi/{("train" if is_training else "test")}",
+        f"{cfg.dataset.root}/{("train" if is_training else "test")}",
         cfg.extract.window_size, cfg.extract.train_stride if is_training else cfg.extract.test_stride,
         return_idx=True
     )
